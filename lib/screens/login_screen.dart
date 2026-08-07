@@ -239,10 +239,10 @@ class _Brand extends StatelessWidget {
       children: [
         BrandMark(size: isWide ? 80 : 56, radius: isWide ? 22 : 16),
         SizedBox(height: isWide ? 26 : 18),
-        Text("FARMER'S CHOICE · CM DIVISION", style: AppTheme.eyebrow),
+        Text("Choice Meats - Beef Procurement", style: AppTheme.eyebrow),
         const SizedBox(height: 10),
         Text(
-          'CM Beef',
+          'Ranch Evaluator',
           style: TextStyle(
             fontSize: isWide ? 44 : 30,
             fontWeight: FontWeight.w600,
