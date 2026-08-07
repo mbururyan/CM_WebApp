@@ -214,7 +214,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               child: const Text(
                 'Use the same username and password as the mobile app. '
-                'Accounts are created there, not here.',
+                'Contact Admin for CRUD access to the dashboard.',
                 style: TextStyle(
                     fontSize: 12, color: AppColors.amber, height: 1.55),
               ),
@@ -237,12 +237,18 @@ class _Brand extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        BrandMark(size: isWide ? 80 : 56, radius: isWide ? 22 : 16),
+        //BrandMark(size: isWide ? 80 : 56, radius: isWide ? 22 : 16),
+        Image.asset(
+          'assets/icons/bull_head_detailed.png',
+          width: isWide ? 80 : 56,
+          height: isWide ? 80 : 56,
+          fit: BoxFit.contain,
+        ),
         SizedBox(height: isWide ? 26 : 18),
         Text("Choice Meats - Beef Procurement", style: AppTheme.eyebrow),
         const SizedBox(height: 10),
         Text(
-          'Ranch Evaluator',
+          'RANCH EVALUATOR',
           style: TextStyle(
             fontSize: isWide ? 44 : 30,
             fontWeight: FontWeight.w600,
@@ -252,7 +258,7 @@ class _Brand extends StatelessWidget {
         ),
         SizedBox(height: isWide ? 14 : 10),
         Text(
-          'Farm evaluation data from the field, for management.',
+          'Farm evaluation data and analytics dashboard.',
           style: TextStyle(
             fontSize: isWide ? 14.5 : 13.5,
             color: AppColors.text2,
