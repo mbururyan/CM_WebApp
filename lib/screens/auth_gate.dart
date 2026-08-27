@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
+import '../services/config_service.dart';
 import '../services/session_service.dart';
 import '../theme/app_colors.dart';
 import 'dashboard_shell.dart';
@@ -10,8 +11,7 @@ import 'login_screen.dart';
 /// Decides what the app shows: login, a loading state, or the dashboard.
 ///
 /// Nothing else navigates on sign-in or sign-out. Screens just call
-/// AuthService, the auth stream fires, and this rebuilds. That's why there
-/// are no Navigator calls in LoginScreen any more.
+/// AuthService, the auth stream fires, and this rebuilds.
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
@@ -36,9 +36,9 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-/// Loads `users/{uid}` before letting anyone into the shell, because the
-/// whole UI branches on `role` and rendering it before the role is known
-/// would flash the wrong navigation.
+/// Loads the config and `users/{uid}` before letting anyone into the shell,
+/// because the whole UI branches on `role` and bands every score — building
+/// first would flash the wrong navigation and the wrong ratings.
 class _ProfileLoader extends StatefulWidget {
   const _ProfileLoader({required this.uid});
 
@@ -70,6 +70,10 @@ class _ProfileLoaderState extends State<_ProfileLoader> {
       _error = null;
     });
     try {
+      // Config first. It never throws — worst case the provisional
+      // defaults stand — so it can't block sign-in.
+      await ConfigService.load();
+
       final profile = await AuthService.loadProfile(widget.uid);
       if (!profile.active) {
         await AuthService.signOut();
@@ -176,8 +180,7 @@ class _Problem extends StatelessWidget {
               children: [
                 const Text(
                   'Cannot open the dashboard',
-                  style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 10),
                 Text(
@@ -193,8 +196,8 @@ class _Problem extends StatelessWidget {
                     const SizedBox(width: 10),
                     TextButton(
                       onPressed: onSignOut,
-                      style: TextButton.styleFrom(
-                          foregroundColor: AppColors.muted),
+                      style:
+                          TextButton.styleFrom(foregroundColor: AppColors.muted),
                       child: const Text('Sign out'),
                     ),
                   ],

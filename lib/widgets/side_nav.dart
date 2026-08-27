@@ -24,8 +24,8 @@ class NavItem {
   /// When set, a small section label is drawn above this item.
   final String? section;
 
-  /// Hidden from evaluators. Reads are open to everyone; these are the
-  /// destinations that only exist to write or extract.
+  /// Hidden from evaluators. Reads AND exports are open to everyone — only
+  /// destinations that exist purely to change settings are gated.
   final bool adminOnly;
 }
 
@@ -55,14 +55,13 @@ const navItems = <NavItem>[
   NavItem(
     label: 'Exports',
     icon: Icons.file_download_outlined,
-    subtitle: 'Generated in the browser, no server',
-    section: 'Admin',
-    adminOnly: true,
+    subtitle: 'Excel and CSV pulls — open to everyone',
   ),
   NavItem(
     label: 'Settings',
     icon: Icons.tune_outlined,
     subtitle: 'Scoring and thresholds',
+    section: 'Admin',
     adminOnly: true,
   ),
 ];

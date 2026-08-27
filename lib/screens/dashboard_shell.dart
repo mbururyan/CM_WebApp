@@ -5,12 +5,14 @@ import '../services/session_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../widgets/side_nav.dart';
-import 'placeholder_page.dart';
+import 'evaluators_page.dart';
+import 'exports_page.dart';
+import 'farms_page.dart';
+import 'overview_page.dart';
+import 'settings_page.dart';
+import 'visits_page.dart';
 
 /// The signed-in frame. Holds the sidebar, the top bar and the current page.
-///
-/// One shell, two layouts: at or above [Layout.wideBreakpoint] the sidebar is
-/// a permanent column; below it, the same widget is served as a drawer.
 class DashboardShell extends StatefulWidget {
   const DashboardShell({super.key});
 
@@ -27,8 +29,8 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   Future<void> _signOut() async {
-    // No navigation here — AuthGate is listening to the auth stream and
-    // swaps the login screen back in on its own.
+    // No navigation here — AuthGate listens to the auth stream and swaps
+    // the login screen back in on its own.
     await AuthService.signOut();
   }
 
@@ -96,62 +98,17 @@ class _DashboardShellState extends State<DashboardShell> {
   Widget _pageFor(int i) {
     switch (i) {
       case 0:
-        return const PlaceholderPage(
-          title: 'Overview',
-          willContain: [
-            'Headline figures: farms, visits, average score, head overseen',
-            'Average score per section, ranked worst first',
-            'Rating mix, visits per week, head by county',
-            'Recent visits and farms overdue a visit',
-          ],
-        );
+        return const OverviewPage();
       case 1:
-        return const PlaceholderPage(
-          title: 'Visits',
-          willContain: [
-            'Filterable table: date range, county, evaluator, rating',
-            'Row opens a read-only visit detail',
-            'Admin delete, logged before the document goes',
-          ],
-        );
+        return const VisitsPage();
       case 2:
-        return const PlaceholderPage(
-          title: 'Farms',
-          willContain: [
-            'The full register, searchable by farm, owner or village',
-            'Visit count and latest score per farm',
-            'Never-visited and overdue filters',
-            'Admin edit and delete',
-          ],
-        );
+        return const FarmsPage();
       case 3:
-        return const PlaceholderPage(
-          title: 'Evaluators',
-          willContain: [
-            'Field officers, their visit counts and last activity',
-            'Average score given, visible to everyone',
-            'Admin: change role, deactivate an account',
-          ],
-        );
+        return const EvaluatorsPage();
       case 4:
-        return const PlaceholderPage(
-          title: 'Exports',
-          willContain: [
-            'Full evaluation export, flattened to the 80-column layout',
-            'Farms register and latest herd counts',
-            'Section scores in long format for Power BI',
-            'Built client-side in Dart — no Cloud Functions needed',
-          ],
-        );
+        return const ExportsPage();
       default:
-        return const PlaceholderPage(
-          title: 'Settings',
-          willContain: [
-            'Rating bands, editable once FCL confirms them',
-            'Overdue threshold for the farms-not-visited figure',
-            'The deletions log',
-          ],
-        );
+        return const SettingsPage();
     }
   }
 }
@@ -218,7 +175,8 @@ class _TopBar extends StatelessWidget {
               border: Border.all(color: accent.withValues(alpha: 0.45)),
               borderRadius: BorderRadius.circular(999),
             ),
-            child: Text(roleLabel, style: AppTheme.eyebrow.copyWith(color: accent)),
+            child:
+                Text(roleLabel, style: AppTheme.eyebrow.copyWith(color: accent)),
           ),
         ],
       ),
