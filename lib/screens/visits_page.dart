@@ -13,11 +13,12 @@ import '../widgets/confirm_delete.dart';
 import '../widgets/panel.dart';
 import 'visit_detail_page.dart';
 
-/// Every submitted evaluation, filterable, with a read-only detail view.
+/// Every submitted evaluation, newest first, as a dense listing.
 ///
-/// Filtering happens in memory over the already-loaded set: instant, no
-/// composite indexes, and the same filtered list is what the Excel export
-/// will consume.
+/// Column widths are FIXED rather than flexed. A horizontal scroll view
+/// hands its child unbounded width, and Expanded inside unbounded width
+/// throws — which is what left this table blank. Fixed widths also keep the
+/// header and the rows aligned without a shared layout pass.
 class VisitsPage extends StatefulWidget {
   const VisitsPage({super.key});
 
@@ -32,16 +33,13 @@ class _VisitsPageState extends State<VisitsPage> {
   String _county = _all;
   String _evaluator = _all;
   String _rating = _all;
-  int _days = 0; // 0 means no date limit
-
-  /// Rows rendered before "Load more". Keeps a long table from becoming a
-  /// wall of rows the GM has to scroll past.
+  int _days = 0;
   int _shown = _pageSize;
 
   Evaluation? _selected;
 
   static const _all = 'All';
-  static const _pageSize = 25;
+  static const _pageSize = 40;
 
   @override
   void initState() {
@@ -56,8 +54,7 @@ class _VisitsPageState extends State<VisitsPage> {
 
   List<Evaluation> _apply(List<Evaluation> source) {
     final now = DateTime.now();
-    final cutoff =
-        _days == 0 ? null : now.subtract(Duration(days: _days));
+    final cutoff = _days == 0 ? null : now.subtract(Duration(days: _days));
     final q = _search.trim().toLowerCase();
 
     final rows = source.where((v) {
@@ -67,12 +64,14 @@ class _VisitsPageState extends State<VisitsPage> {
       if (_rating != _all && v.band != _rating) return false;
       if (q.isNotEmpty) {
         final hay =
-            '${v.farmName} ${v.eoName} ${v.county} ${v.subCounty}'.toLowerCase();
+            '${v.farmName} ${v.eoName} ${v.county} ${v.subCounty}'
+                .toLowerCase();
         if (!hay.contains(q)) return false;
       }
       return true;
     }).toList();
 
+    // Newest first, created_at breaking same-day ties.
     rows.sort((a, b) {
       final byDate = b.evaluationDate.compareTo(a.evaluationDate);
       if (byDate != 0) return byDate;
@@ -82,6 +81,45 @@ class _VisitsPageState extends State<VisitsPage> {
     });
 
     return rows;
+  }
+
+  Future<void> _deleteVisit(Evaluation v) async {
+    final reason = await ConfirmDelete.show(
+      context,
+      title: 'Delete this visit?',
+      subject: '${v.farmName} · ${Fmt.date(v.evaluationDate)} · '
+          'by ${v.eoName} · ${v.totalScore}/35',
+      consequence:
+          'The visit disappears from every figure on this dashboard and from '
+          'the exports. A full copy is kept in the deletions log.',
+    );
+    if (reason == null || !mounted) return;
+
+    try {
+      await AdminService.deleteEvaluation(
+        evalId: v.id,
+        summary: '${v.farmName} · ${Fmt.date(v.evaluationDate)} · '
+            '${v.eoName} · ${v.totalScore}/35',
+        reason: reason,
+      );
+      if (!mounted) return;
+      _toast('Visit deleted and logged.');
+      _reload();
+    } on AdminFailure catch (e) {
+      if (mounted) _toast(e.message, bad: true);
+    } catch (e) {
+      if (mounted) _toast('Delete failed: $e', bad: true);
+    }
+  }
+
+  void _toast(String msg, {bool bad = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: bad ? const Color(0xFF2A1512) : AppColors.fill,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
@@ -140,20 +178,31 @@ class _VisitsPageState extends State<VisitsPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _Filters(
-              counties: _optionsFrom(all.map((v) => v.county)),
-              evaluators: _optionsFrom(all.map((v) => v.eoName)),
-              search: _search,
+              counties: _options(all.map((v) => v.county)),
+              evaluators: _options(all.map((v) => v.eoName)),
               county: _county,
               evaluator: _evaluator,
               rating: _rating,
               days: _days,
-              onChanged: (f) => setState(() {
-                _search = f.search;
-                _county = f.county;
-                _evaluator = f.evaluator;
-                _rating = f.rating;
-                _days = f.days;
-                _shown = _pageSize; // a new filter starts at the top
+              onSearch: (v) => setState(() {
+                _search = v;
+                _shown = _pageSize;
+              }),
+              onCounty: (v) => setState(() {
+                _county = v;
+                _shown = _pageSize;
+              }),
+              onEvaluator: (v) => setState(() {
+                _evaluator = v;
+                _shown = _pageSize;
+              }),
+              onRating: (v) => setState(() {
+                _rating = v;
+                _shown = _pageSize;
+              }),
+              onDays: (v) => setState(() {
+                _days = v;
+                _shown = _pageSize;
               }),
               onExport: rows.isEmpty
                   ? null
@@ -168,14 +217,17 @@ class _VisitsPageState extends State<VisitsPage> {
             const SizedBox(height: 14),
             if (rows.isEmpty)
               Panel(
-                title: 'No visits match these filters',
+                title: all.isEmpty
+                    ? 'No submitted visits yet'
+                    : 'No visits match these filters',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       all.isEmpty
-                          ? 'No submitted visits have reached the database yet.'
-                          : 'Try widening the date range or clearing a filter.',
+                          ? 'Nothing has been submitted from the mobile app '
+                              'yet. Drafts are deliberately excluded.'
+                          : 'Try widening the period or clearing a filter.',
                       style: const TextStyle(
                           fontSize: 13, color: AppColors.text2, height: 1.6),
                     ),
@@ -196,7 +248,7 @@ class _VisitsPageState extends State<VisitsPage> {
                 ),
               )
             else
-              _VisitTable(
+              _Listing(
                 rows: visible,
                 total: rows.length,
                 onOpen: (v) => setState(() => _selected = v),
@@ -210,234 +262,43 @@ class _VisitsPageState extends State<VisitsPage> {
     );
   }
 
-  static List<String> _optionsFrom(Iterable<String> values) {
+  static List<String> _options(Iterable<String> values) {
     final set = values.where((s) => s.isNotEmpty && s != '—').toSet().toList()
       ..sort();
     return [_all, ...set];
   }
-
-  Future<void> _deleteVisit(Evaluation v) async {
-    final reason = await ConfirmDelete.show(
-      context,
-      title: 'Delete this visit?',
-      subject: '${v.farmName} · ${Fmt.date(v.evaluationDate)} · '
-          'by ${v.eoName} · ${v.totalScore}/35',
-      consequence:
-          'The visit disappears from every figure on this dashboard and from '
-          'the exports. A full copy is kept in the deletions log, so it can '
-          'be rebuilt, but it will not come back on its own.',
-    );
-    if (reason == null || !mounted) return;
-
-    try {
-      await AdminService.deleteEvaluation(
-        evalId: v.id,
-        summary: '${v.farmName} · ${Fmt.date(v.evaluationDate)} · '
-            '${v.eoName} · ${v.totalScore}/35',
-        reason: reason,
-      );
-      if (!mounted) return;
-      _toast('Visit deleted and logged.');
-      // Back to the table, and re-read so the counts are honest.
-      setState(() {
-        _selected = null;
-        _future = DataService.loadAll();
-      });
-    } on AdminFailure catch (e) {
-      if (mounted) _toast(e.message, bad: true);
-    } catch (e) {
-      if (mounted) _toast('Delete failed: $e', bad: true);
-    }
-  }
-
-  void _toast(String msg, {bool bad = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: bad ? const Color(0xFF2A1512) : AppColors.fill,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
 }
 
-/// Bundle so the filter row reports all its state in one callback.
-class FilterState {
-  const FilterState({
-    required this.search,
-    required this.county,
-    required this.evaluator,
-    required this.rating,
-    required this.days,
-  });
+// ---------------------------------------------------------------------
+// Column widths. One list, used by the header and every row, so they
+// cannot drift apart.
+// ---------------------------------------------------------------------
 
-  final String search;
-  final String county;
-  final String evaluator;
-  final String rating;
-  final int days;
-}
+const _cFarm = 190.0;
+const _cCounty = 115.0;
+const _cSub = 110.0;
+const _cEo = 135.0;
+const _cHerd = 58.0;
+const _cTotal = 70.0;
+const _cDate = 108.0;
+const _cScore = 62.0;
+const _cRating = 92.0;
+const _cChevron = 30.0;
 
-class _Filters extends StatelessWidget {
-  const _Filters({
-    required this.counties,
-    required this.evaluators,
-    required this.search,
-    required this.county,
-    required this.evaluator,
-    required this.rating,
-    required this.days,
-    required this.onChanged,
-    required this.onExport,
-  });
+const _tableWidth = _cFarm +
+    _cCounty +
+    _cSub +
+    _cEo +
+    _cHerd * 4 +
+    _cTotal +
+    _cDate +
+    _cScore +
+    _cRating +
+    _cChevron +
+    32; // horizontal padding
 
-  final List<String> counties;
-  final List<String> evaluators;
-  final String search;
-  final String county;
-  final String evaluator;
-  final String rating;
-  final int days;
-  final ValueChanged<FilterState> onChanged;
-  final VoidCallback? onExport;
-
-  FilterState _with({
-    String? s,
-    String? c,
-    String? e,
-    String? r,
-    int? d,
-  }) =>
-      FilterState(
-        search: s ?? search,
-        county: c ?? county,
-        evaluator: e ?? evaluator,
-        rating: r ?? rating,
-        days: d ?? days,
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        SizedBox(
-          width: 240,
-          child: TextField(
-            decoration: const InputDecoration(
-              hintText: 'Search farm or evaluator',
-              prefixIcon: Icon(Icons.search, size: 18, color: AppColors.muted),
-              isDense: true,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
-            style: const TextStyle(fontSize: 13),
-            onChanged: (v) => onChanged(_with(s: v)),
-          ),
-        ),
-        _Dropdown(
-          value: county,
-          items: counties,
-          onChanged: (v) => onChanged(_with(c: v)),
-        ),
-        _Dropdown(
-          value: evaluator,
-          items: evaluators,
-          onChanged: (v) => onChanged(_with(e: v)),
-        ),
-        _Dropdown(
-          value: _dayLabel(days),
-          items: const [
-            'All time',
-            'Last 30 days',
-            'Last 90 days',
-            'Last 12 months',
-          ],
-          onChanged: (v) => onChanged(_with(d: _dayValue(v))),
-        ),
-        _Dropdown(
-          value: rating == 'All' ? 'All ratings' : Fmt.humanise(rating),
-          items: const ['All ratings', 'Poor', 'Fair', 'Good', 'Excellent'],
-          onChanged: (v) => onChanged(
-              _with(r: v == 'All ratings' ? 'All' : v.toLowerCase())),
-        ),
-        if (onExport != null)
-          FilledButton.icon(
-            onPressed: onExport,
-            icon: const Icon(Icons.download_outlined, size: 16),
-            label: const Text('Export to Excel'),
-            style: FilledButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            ),
-          ),
-      ],
-    );
-  }
-
-  static String _dayLabel(int d) => switch (d) {
-        30 => 'Last 30 days',
-        90 => 'Last 90 days',
-        365 => 'Last 12 months',
-        _ => 'All time',
-      };
-
-  static int _dayValue(String label) => switch (label) {
-        'Last 30 days' => 30,
-        'Last 90 days' => 90,
-        'Last 12 months' => 365,
-        _ => 0,
-      };
-}
-
-class _Dropdown extends StatelessWidget {
-  const _Dropdown({
-    required this.value,
-    required this.items,
-    required this.onChanged,
-  });
-
-  final String value;
-  final List<String> items;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppColors.fill,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: items.contains(value) ? value : items.first,
-          items: items
-              .map((i) => DropdownMenuItem(
-                    value: i,
-                    child: Text(i, style: const TextStyle(fontSize: 13)),
-                  ))
-              .toList(),
-          onChanged: (v) {
-            if (v != null) onChanged(v);
-          },
-          isDense: true,
-          dropdownColor: AppColors.surface,
-          borderRadius: BorderRadius.circular(10),
-          icon: const Icon(Icons.expand_more,
-              size: 18, color: AppColors.muted),
-        ),
-      ),
-    );
-  }
-}
-
-class _VisitTable extends StatelessWidget {
-  const _VisitTable({
+class _Listing extends StatelessWidget {
+  const _Listing({
     required this.rows,
     required this.total,
     required this.onOpen,
@@ -460,24 +321,31 @@ class _VisitTable extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          // Horizontal scroll rather than squeezing eight columns onto a
-          // phone — a squashed table is unreadable, a scrollable one isn't.
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minWidth: MediaQuery.sizeOf(context).width > 900
-                    ? MediaQuery.sizeOf(context).width - 300
-                    : 760,
-              ),
-              child: Column(
-                children: [
-                  const _HeaderRow(),
-                  for (final v in rows)
-                    _Row(visit: v, onTap: () => onOpen(v)),
-                ],
-              ),
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Stretch to fill when there is room, scroll when there isn't.
+              final width = constraints.maxWidth > _tableWidth
+                  ? constraints.maxWidth
+                  : _tableWidth;
+
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: width,
+                  child: Column(
+                    children: [
+                      const _HeaderRow(),
+                      for (var i = 0; i < rows.length; i++)
+                        _Row(
+                          visit: rows[i],
+                          striped: i.isOdd,
+                          onTap: () => onOpen(rows[i]),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -511,41 +379,40 @@ class _VisitTable extends StatelessWidget {
   }
 }
 
-// Column widths shared by the header and every row so they stay aligned.
-const _wFarm = 3;
-const _wCounty = 2;
-const _wEo = 2;
-const _wDate = 2;
-const _wHead = 1;
-
 class _HeaderRow extends StatelessWidget {
   const _HeaderRow();
 
   @override
   Widget build(BuildContext context) {
-    Widget h(String t, int flex, {TextAlign align = TextAlign.left}) =>
-        Expanded(
-          flex: flex,
+    Widget h(String t, double w, {TextAlign align = TextAlign.left}) =>
+        SizedBox(
+          width: w,
           child: Text(t.toUpperCase(),
               textAlign: align, style: AppTheme.eyebrow),
         );
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
       decoration: const BoxDecoration(
+        color: Color(0xFF202020),
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
       child: Row(
         children: [
-          h('Farm', _wFarm),
-          h('County', _wCounty),
-          h('Evaluator', _wEo),
-          h('Date', _wDate),
-          h('Head', _wHead, align: TextAlign.right),
-          const SizedBox(width: 16),
-          SizedBox(width: 56, child: Text('SCORE', style: AppTheme.eyebrow)),
-          SizedBox(width: 92, child: Text('RATING', style: AppTheme.eyebrow)),
-          const SizedBox(width: 28),
+          h('Farm', _cFarm),
+          h('County', _cCounty),
+          h('Sub-county', _cSub),
+          h('Evaluator', _cEo),
+          h('Cows', _cHerd, align: TextAlign.right),
+          h('Bulls', _cHerd, align: TextAlign.right),
+          h('Calves', _cHerd, align: TextAlign.right),
+          h('Growers', _cHerd, align: TextAlign.right),
+          h('Head', _cTotal, align: TextAlign.right),
+          const SizedBox(width: 14),
+          h('Visited', _cDate),
+          h('Score', _cScore),
+          h('Rating', _cRating),
+          const SizedBox(width: _cChevron),
         ],
       ),
     );
@@ -553,9 +420,17 @@ class _HeaderRow extends StatelessWidget {
 }
 
 class _Row extends StatefulWidget {
-  const _Row({required this.visit, required this.onTap});
+  const _Row({
+    required this.visit,
+    required this.striped,
+    required this.onTap,
+  });
 
   final Evaluation visit;
+
+  /// Alternating tint — at a dozen columns the eye loses the line without it.
+  final bool striped;
+
   final VoidCallback onTap;
 
   @override
@@ -568,23 +443,35 @@ class _RowState extends State<_Row> {
   @override
   Widget build(BuildContext context) {
     final v = widget.visit;
-    final scoreColor = AppColors.forTotalScore(v.totalScore);
+    final color = AppColors.forTotalScore(v.totalScore);
 
-    Widget cell(String t, int flex,
+    Widget text(String t, double w,
             {TextAlign align = TextAlign.left,
             bool mono = false,
+            Color? c,
             FontWeight? weight}) =>
-        Expanded(
-          flex: flex,
+        SizedBox(
+          width: w,
           child: Text(
             t.isEmpty ? '—' : t,
             textAlign: align,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: mono
-                ? AppTheme.mono(size: 12.5, color: AppColors.text2)
-                : TextStyle(fontSize: 13, fontWeight: weight),
+                ? AppTheme.mono(size: 12, color: c ?? AppColors.text2)
+                : TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: weight,
+                    color: c ?? AppColors.text),
           ),
         );
+
+    // A herd class of zero is real information, but printing "0" four times
+    // per row is noise — a dash reads faster.
+    Widget count(int n) => text(n == 0 ? '–' : Fmt.thousands(n), _cHerd,
+        align: TextAlign.right,
+        mono: true,
+        c: n == 0 ? AppColors.muted : AppColors.text2);
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -593,68 +480,232 @@ class _RowState extends State<_Row> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-          color: _hover ? const Color(0xFF232323) : Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          decoration: BoxDecoration(
+            color: _hover
+                ? const Color(0xFF2A2A2A)
+                : (widget.striped
+                    ? const Color(0xFF1B1B1B)
+                    : Colors.transparent),
+            border: const Border(
+                bottom: BorderSide(color: Color(0xFF262626))),
+          ),
           child: Row(
             children: [
-              cell(v.farmName, _wFarm, weight: FontWeight.w500),
-              cell(v.county, _wCounty),
-              cell(v.eoName, _wEo),
-              cell(Fmt.date(v.evaluationDate), _wDate, mono: true),
-              cell(Fmt.thousands(v.totalHerd), _wHead,
-                  align: TextAlign.right, mono: true),
-              const SizedBox(width: 16),
+              text(v.farmName, _cFarm, weight: FontWeight.w500),
+              text(v.county, _cCounty, c: AppColors.text2),
+              text(v.subCounty, _cSub, c: AppColors.text2),
+              text(v.eoName, _cEo, c: AppColors.text2),
+              count(v.breedingCows),
+              count(v.bulls),
+              count(v.calves),
+              count(v.growersSteers),
+              text(Fmt.thousands(v.totalHerd), _cTotal,
+                  align: TextAlign.right, mono: true, c: AppColors.text),
+              const SizedBox(width: 14),
+              text(Fmt.date(v.evaluationDate), _cDate, mono: true),
               SizedBox(
-                width: 56,
+                width: _cScore,
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Container(
                     width: 42,
-                    height: 26,
+                    height: 24,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: scoreColor,
-                      borderRadius: BorderRadius.circular(7),
+                      color: color,
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text(
-                      '${v.totalScore}',
-                      style: AppTheme.mono(
-                          size: 12.5,
-                          weight: FontWeight.w600,
-                          color: const Color(0xFF0D0D0D)),
-                    ),
+                    child: Text('${v.totalScore}',
+                        style: AppTheme.mono(
+                            size: 12,
+                            weight: FontWeight.w600,
+                            color: const Color(0xFF0D0D0D))),
                   ),
                 ),
               ),
               SizedBox(
-                width: 92,
+                width: _cRating,
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 9, vertical: 3),
                     decoration: BoxDecoration(
-                      color: scoreColor.withValues(alpha: 0.16),
+                      color: color.withValues(alpha: 0.16),
                       borderRadius: BorderRadius.circular(999),
                     ),
-                    child: Text(
-                      v.ratingLabel.toUpperCase(),
-                      style: AppTheme.mono(size: 10, color: scoreColor),
-                    ),
+                    child: Text(v.ratingLabel.toUpperCase(),
+                        style: AppTheme.mono(size: 9.5, color: color)),
                   ),
                 ),
               ),
               SizedBox(
-                width: 28,
-                child: Icon(
-                  Icons.chevron_right,
-                  size: 17,
-                  color: _hover ? AppColors.text2 : AppColors.muted,
-                ),
+                width: _cChevron,
+                child: Icon(Icons.chevron_right,
+                    size: 16,
+                    color: _hover ? AppColors.text2 : AppColors.muted),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _Filters extends StatelessWidget {
+  const _Filters({
+    required this.counties,
+    required this.evaluators,
+    required this.county,
+    required this.evaluator,
+    required this.rating,
+    required this.days,
+    required this.onSearch,
+    required this.onCounty,
+    required this.onEvaluator,
+    required this.onRating,
+    required this.onDays,
+    required this.onExport,
+  });
+
+  final List<String> counties;
+  final List<String> evaluators;
+  final String county;
+  final String evaluator;
+  final String rating;
+  final int days;
+  final ValueChanged<String> onSearch;
+  final ValueChanged<String> onCounty;
+  final ValueChanged<String> onEvaluator;
+  final ValueChanged<String> onRating;
+  final ValueChanged<int> onDays;
+  final VoidCallback? onExport;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: 240,
+          child: TextField(
+            decoration: const InputDecoration(
+              hintText: 'Search farm or evaluator',
+              prefixIcon: Icon(Icons.search, size: 18, color: AppColors.muted),
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            ),
+            style: const TextStyle(fontSize: 13),
+            onChanged: onSearch,
+          ),
+        ),
+        // Labelled: four dropdowns all reading "All" say nothing about what
+        // they filter.
+        _Select(
+            label: 'County',
+            value: county,
+            items: counties,
+            onChanged: onCounty),
+        _Select(
+            label: 'Evaluator',
+            value: evaluator,
+            items: evaluators,
+            onChanged: onEvaluator),
+        _Select(
+          label: 'Period',
+          value: _dayLabel(days),
+          items: const ['All time', 'Last 30 days', 'Last 90 days',
+              'Last year'],
+          onChanged: (v) => onDays(_dayValue(v)),
+        ),
+        _Select(
+          label: 'Rating',
+          value: rating == 'All' ? 'All' : Fmt.humanise(rating),
+          items: const ['All', 'Poor', 'Fair', 'Good', 'Excellent'],
+          onChanged: (v) => onRating(v == 'All' ? 'All' : v.toLowerCase()),
+        ),
+        if (onExport != null)
+          FilledButton.icon(
+            onPressed: onExport,
+            icon: const Icon(Icons.download_outlined, size: 16),
+            label: const Text('Export to Excel'),
+            style: FilledButton.styleFrom(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            ),
+          ),
+      ],
+    );
+  }
+
+  static String _dayLabel(int d) => switch (d) {
+        30 => 'Last 30 days',
+        90 => 'Last 90 days',
+        365 => 'Last year',
+        _ => 'All time',
+      };
+
+  static int _dayValue(String label) => switch (label) {
+        'Last 30 days' => 30,
+        'Last 90 days' => 90,
+        'Last year' => 365,
+        _ => 0,
+      };
+}
+
+class _Select extends StatelessWidget {
+  const _Select({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String value;
+  final List<String> items;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppColors.fill,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('${label.toUpperCase()}  ', style: AppTheme.eyebrow),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: items.contains(value) ? value : items.first,
+              items: items
+                  .map((i) => DropdownMenuItem(
+                        value: i,
+                        child: Text(i,
+                            style: const TextStyle(fontSize: 13)),
+                      ))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) onChanged(v);
+              },
+              isDense: true,
+              dropdownColor: AppColors.surface,
+              borderRadius: BorderRadius.circular(10),
+              icon: const Icon(Icons.expand_more,
+                  size: 18, color: AppColors.muted),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -137,6 +137,27 @@ class Analytics {
 
   int get farmsCovered => latestVisitPerFarm.length;
 
+  /// The herd split by class, from each farm's latest visit in the window.
+  ///
+  /// Same rule as [totalHead]: latest visit per farm, never a sum across
+  /// visits, or a farm seen twice would contribute its animals twice.
+  HerdBreakdown get herdBreakdown {
+    var cows = 0, bulls = 0, calves = 0, growers = 0;
+    for (final v in latestVisitPerFarm.values) {
+      cows += v.breedingCows;
+      bulls += v.bulls;
+      calves += v.calves;
+      growers += v.growersSteers;
+    }
+    return HerdBreakdown(
+      breedingCows: cows,
+      bulls: bulls,
+      calves: calves,
+      growersSteers: growers,
+      farms: latestVisitPerFarm.length,
+    );
+  }
+
   // ---------- the latest-visit index ----------
 
   /// farm_id -> that farm's most recent visit within the window.
@@ -311,4 +332,52 @@ class Analytics {
     final midnight = DateTime(d.year, d.month, d.day);
     return midnight.subtract(Duration(days: midnight.weekday - 1));
   }
+}
+
+/// The herd split by animal class.
+class HerdBreakdown {
+  const HerdBreakdown({
+    required this.breedingCows,
+    required this.bulls,
+    required this.calves,
+    required this.growersSteers,
+    required this.farms,
+  });
+
+  final int breedingCows;
+  final int bulls;
+  final int calves;
+  final int growersSteers;
+
+  /// How many farms these counts came from — the denominator behind the
+  /// averages, and the reason the total moves when the date filter does.
+  final int farms;
+
+  int get total => breedingCows + bulls + calves + growersSteers;
+
+  /// Label, count, and share of the total, biggest first.
+  List<(String, int, double)> get classes {
+    final rows = <(String, int)>[
+      ('Breeding cows', breedingCows),
+      ('Growers / steers', growersSteers),
+      ('Calves', calves),
+      ('Bulls', bulls),
+    ]..sort((a, b) => b.$2.compareTo(a.$2));
+
+    final t = total;
+    return rows
+        .map((r) => (r.$1, r.$2, t == 0 ? 0.0 : r.$2 / t * 100))
+        .toList();
+  }
+
+  /// Cows per bull. A standard herd-structure check — a ratio far above
+  /// about 30:1 suggests the farm is under-served for breeding.
+  double? get cowsPerBull =>
+      bulls == 0 ? null : breedingCows / bulls;
+
+  /// Calves per breeding cow, a rough proxy for calving rate.
+  double? get calvesPerCow =>
+      breedingCows == 0 ? null : calves / breedingCows;
+
+  double get averagePerFarm => farms == 0 ? 0 : total / farms;
 }

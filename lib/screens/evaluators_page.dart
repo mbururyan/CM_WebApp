@@ -185,15 +185,18 @@ class _Headline extends StatelessWidget {
     final width = MediaQuery.sizeOf(context).width;
     final columns = width >= 620 ? 3 : 1;
 
+    // Wider aspect ratio = shorter tiles. These are context for the roster
+    // below, not the main event, and at 1.72 they dominated the page.
     return GridView.count(
       crossAxisCount: columns,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 14,
-      crossAxisSpacing: 14,
-      childAspectRatio: columns == 1 ? 4.2 : 1.72,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: columns == 1 ? 6.0 : 3.1,
       children: [
         KpiTile(
+          accent: AppColors.greenLight,
           label: 'Active officers',
           value: '$active',
           suffix: ' / ${evaluators.length}',
@@ -203,6 +206,7 @@ class _Headline extends StatelessWidget {
           sublineColor: idle == 0 ? null : AppColors.amber,
         ),
         KpiTile(
+          accent: AppColors.greenLight,
           label: 'Visits per officer',
           value: evaluators.isEmpty
               ? '—'
@@ -214,6 +218,7 @@ class _Headline extends StatelessWidget {
               : 'median ${median.toStringAsFixed(median == median.roundToDouble() ? 0 : 1)}',
         ),
         KpiTile(
+          accent: AppColors.greenLight,
           label: 'Spread in avg score',
           value: spread == null ? '—' : spread.toStringAsFixed(1),
           subline: spread == null
@@ -244,32 +249,23 @@ class _Grid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final columns = width >= 1180 ? 3 : (width >= 760 ? 2 : 1);
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        const gap = 14.0;
-        final cardWidth =
-            (constraints.maxWidth - gap * (columns - 1)) / columns;
-
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final s in stats)
-              SizedBox(
-                width: cardWidth,
-                child: _OfficerCard(
-                  stats: s,
-                  now: now,
-                  fleetAverage: fleetAverage,
-                  onTap: () => onOpen(s),
-                ),
-              ),
-          ],
-        );
-      },
+    // One officer per row. A roster is read down a column of names, not
+    // scanned across a grid — and the row has space for every metric
+    // without truncating.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < stats.length; i++)
+          Padding(
+            padding: EdgeInsets.only(bottom: i == stats.length - 1 ? 0 : 10),
+            child: _OfficerCard(
+              stats: stats[i],
+              now: now,
+              fleetAverage: fleetAverage,
+              onTap: () => onOpen(stats[i]),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -301,6 +297,7 @@ class _OfficerCardState extends State<_OfficerCard> {
     final avg = s.avgScoreGiven;
     final perMonth = s.avgVisitsPerMonth(widget.now);
     final idle = s.isIdle(widget.now);
+    final isWide = MediaQuery.sizeOf(context).width >= 900;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -310,139 +307,136 @@ class _OfficerCardState extends State<_OfficerCard> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 120),
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             color: _hover ? const Color(0xFF232323) : AppColors.surface,
             border: Border.all(
                 color: _hover ? const Color(0xFF4A4A4A) : AppColors.border),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: AppColors.fill,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(u.initials,
-                        style: AppTheme.mono(
-                            size: 13, color: AppColors.text2)),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(u.displayName,
-                            style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        const SizedBox(height: 2),
-                        Text(u.username,
-                            style: const TextStyle(
-                                fontSize: 11.5, color: AppColors.muted),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: u.isAdmin
-                          ? AppColors.amberDark
-                          : AppColors.fill,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(u.roleLabel,
-                        style: AppTheme.mono(
-                            size: 9.5,
-                            color: u.isAdmin
-                                ? AppColors.amber
-                                : AppColors.muted)),
-                  ),
-                ],
+              // ---- identity ----
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.fill,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.border),
+                ),
+                alignment: Alignment.center,
+                child: Text(u.initials,
+                    style: AppTheme.mono(size: 13, color: AppColors.text2)),
               ),
-              const SizedBox(height: 14),
-
-              if (!s.hasVisits)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: AppColors.fill,
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Text(
-                    s.farmsRegistered > 0
-                        ? 'No visits · ${s.farmsRegistered} farms registered'
-                        : 'No visits submitted',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppColors.muted),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                )
-              else ...[
-                Row(
+              const SizedBox(width: 12),
+              SizedBox(
+                width: isWide ? 190 : 130,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    _Metric(label: 'Visits', value: '${s.visitCount}'),
-                    _Metric(label: 'Farms', value: '${s.distinctFarms}'),
-                    _Metric(
-                      label: 'Avg given',
-                      value: avg!.toStringAsFixed(1),
-                      color: AppColors.forTotalScore(avg.round()),
+                    Text(u.displayName,
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 2),
+                    Text(u.username,
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppColors.muted),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: u.isAdmin ? AppColors.amberDark : AppColors.fill,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(u.roleLabel,
+                    style: AppTheme.mono(
+                        size: 9.5,
+                        color:
+                            u.isAdmin ? AppColors.amber : AppColors.muted)),
+              ),
+
+              const Spacer(),
+
+              // ---- metrics ----
+              if (!s.hasVisits)
+                Text(
+                  s.farmsRegistered > 0
+                      ? 'No visits · ${s.farmsRegistered} farms registered'
+                      : 'No visits submitted',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.muted),
+                )
+              else if (isWide) ...[
+                _Metric(label: 'Visits', value: '${s.visitCount}'),
+                _Metric(label: 'Farms', value: '${s.distinctFarms}'),
+                _Metric(
+                  label: 'Avg given',
+                  value: avg!.toStringAsFixed(1),
+                  color: AppColors.forTotalScore(avg.round()),
+                ),
+                _Metric(
+                    label: 'Per month', value: perMonth!.toStringAsFixed(1)),
+                _Metric(
+                    label: 'Head', value: Fmt.thousands(s.headCovered)),
+              ] else
+                _Metric(
+                  label: 'Visits',
+                  value: '${s.visitCount}',
+                ),
+
+              const SizedBox(width: 16),
+
+              // ---- status ----
+              SizedBox(
+                width: isWide ? 130 : 70,
+                child: Row(
+                  children: [
+                    Icon(
+                      !u.active
+                          ? Icons.block
+                          : (idle ? Icons.schedule : Icons.circle),
+                      size: !u.active ? 13 : (idle ? 13 : 8),
+                      color: !u.active
+                          ? AppColors.orange
+                          : (idle
+                              ? AppColors.muted
+                              : AppColors.greenLight),
                     ),
-                    _Metric(
-                      label: 'Per month',
-                      value: perMonth!.toStringAsFixed(1),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        !u.active
+                            ? 'Off'
+                            : (isWide
+                                ? Fmt.relative(s.lastActive,
+                                    now: widget.now)
+                                : (idle ? 'Idle' : 'Active')),
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: !u.active
+                              ? AppColors.orange
+                              : AppColors.muted,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
-              ],
-
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Icon(
-                    !u.active
-                        ? Icons.block
-                        : (idle ? Icons.schedule : Icons.circle),
-                    size: !u.active ? 13 : (idle ? 13 : 8),
-                    color: !u.active
-                        ? AppColors.orange
-                        : (idle ? AppColors.muted : AppColors.greenLight),
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      !u.active
-                          ? 'Deactivated'
-                          : 'Last active ${Fmt.relative(s.lastActive, now: widget.now)}',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: !u.active
-                            ? AppColors.orange
-                            : AppColors.muted,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
               ),
+              Icon(Icons.chevron_right,
+                  size: 17,
+                  color: _hover ? AppColors.text2 : AppColors.muted),
             ],
           ),
         ),
@@ -460,7 +454,10 @@ class _Metric extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
+    // Fixed width, not Expanded: this now sits in a Row that already has a
+    // Spacer, and two competing flex rules would fight.
+    return SizedBox(
+      width: 86,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,

@@ -200,11 +200,15 @@ class _FarmsPageState extends State<FarmsPage> {
       return true;
     }).toList();
 
-    // Never-visited first — those are the actionable gaps — then by name.
+    // Most-visited first, herd size breaking ties — the busiest, biggest
+    // farms lead. Never-visited farms sink to the bottom rather than the
+    // top: they have no numbers to rank on, and the coverage filter is the
+    // right way to find them.
     rows.sort((x, y) {
-      final xv = x.everVisited ? 1 : 0;
-      final yv = y.everVisited ? 1 : 0;
-      if (xv != yv) return xv - yv;
+      final byVisits = y.visitCount.compareTo(x.visitCount);
+      if (byVisits != 0) return byVisits;
+      final byHerd = (y.herdSize ?? 0).compareTo(x.herdSize ?? 0);
+      if (byHerd != 0) return byHerd;
       return x.farm.name.toLowerCase().compareTo(y.farm.name.toLowerCase());
     });
 

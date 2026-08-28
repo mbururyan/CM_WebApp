@@ -7,6 +7,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
 import '../widgets/charts.dart';
+import '../widgets/herd_dialog.dart';
 import '../widgets/panel.dart';
 
 /// The dashboard's front page. Loads the fleet once, then re-slices it in
@@ -131,10 +132,18 @@ class _Body extends StatelessWidget {
           crossAxisSpacing: 14,
           childAspectRatio: 1.72,
           children: [
+            // The only clickable tile on the page — gold outline and a
+            // chevron so it reads as a door rather than a number.
             KpiTile(
               label: 'Total herd size',
               value: Fmt.thousands(a.totalHead),
-              subline: '${a.farmsWithHerdData} farms counted',
+              subline: '${a.farmsWithHerdData} farms · tap for breakdown',
+              accent: AppColors.amber,
+              onTap: () => HerdDialog.show(
+                context,
+                breakdown: a.herdBreakdown,
+                periodLabel: window.label,
+              ),
             ),
             KpiTile(
               label: 'Visits',
