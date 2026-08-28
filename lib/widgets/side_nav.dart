@@ -106,14 +106,14 @@ class SideNav extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'CM Beef',
+                      'Ranch Evaluator',
                       style: TextStyle(
                         fontSize: 14.5,
                         fontWeight: FontWeight.w600,
                         height: 1.15,
                       ),
                     ),
-                    Text("Farmer's Choice", style: AppTheme.eyebrow),
+                    Text("Choice Meats", style: AppTheme.eyebrow),
                   ],
                 ),
               ],

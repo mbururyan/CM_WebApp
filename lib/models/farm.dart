@@ -10,6 +10,7 @@ class Farm {
     required this.locationArea,
     required this.ownerManager,
     required this.contactPhone,
+    required this.contactEmail,
     required this.productionSystem,
     required this.createdBy,
     required this.createdByName,
@@ -23,6 +24,10 @@ class Farm {
   final String locationArea;
   final String ownerManager;
   final String contactPhone;
+
+  /// Added later for emailing the visit report. Blank on every farm
+  /// registered before the field existed, so never assume it is set.
+  final String contactEmail;
   final String productionSystem;
 
   /// Provenance — the EO who registered it. NOT ownership of the data.
@@ -44,6 +49,7 @@ class Farm {
       locationArea: (d['location_area'] as String?) ?? '',
       ownerManager: (d['owner_manager'] as String?) ?? '',
       contactPhone: (d['contact_phone'] as String?) ?? '',
+      contactEmail: (d['contact_email'] as String?)?.trim() ?? '',
       productionSystem: (d['production_system'] as String?) ?? '',
       createdBy: (d['created_by'] as String?) ?? '',
       createdByName: (d['created_by_name'] as String?)?.trim().isNotEmpty ==
