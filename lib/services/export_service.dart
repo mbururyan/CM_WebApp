@@ -106,6 +106,11 @@ class ExportService {
     return cleaned.length <= 31 ? cleaned : cleaned.substring(0, 31);
   }
 
+  /// Hand arbitrary bytes to the browser as a download. Public so the PDF
+  /// module can reuse the same path rather than duplicating the blob dance.
+  static void saveBytes(Uint8List bytes, String filename, String mime) =>
+      _save(bytes, filename, mime);
+
   /// Builds a blob, clicks an invisible link, revokes the object URL.
   /// The revoke matters — without it the bytes stay pinned in memory for
   /// the life of the tab, and a manager pulling ten exports would feel it.

@@ -1,54 +1,17 @@
 import 'package:flutter/material.dart';
 
-import '../models/app_user.dart';
-import '../models/evaluation.dart';
 import '../services/data_service.dart';
 import '../services/export_service.dart';
 import '../services/export_tables.dart';
-import '../services/session_service.dart';
+import '../services/officer_stats.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
 import '../widgets/panel.dart';
+import 'evaluator_detail_page.dart';
 
-/// Everything known about one officer, assembled from their visits.
-class OfficerStats {
-  const OfficerStats({
-    required this.user,
-    required this.visits,
-    required this.farmsRegistered,
-  });
-
-  final AppUser user;
-  final List<Evaluation> visits;
-  final int farmsRegistered;
-
-  int get visitCount => visits.length;
-
-  double? get avgScoreGiven {
-    if (visits.isEmpty) return null;
-    return visits.fold<int>(0, (a, v) => a + v.totalScore) / visits.length;
-  }
-
-  int get distinctFarms => visits.map((v) => v.farmId).toSet().length;
-
-  DateTime? get lastActive {
-    if (visits.isEmpty) return null;
-    return visits
-        .map((v) => v.evaluationDate)
-        .reduce((a, b) => a.isAfter(b) ? a : b);
-  }
-
-  /// Idle when nothing has been submitted in 30 days. Deliberately not
-  /// "inactive" — the account is fine, the fieldwork has just paused.
-  bool isIdle(DateTime now) {
-    final last = lastActive;
-    if (last == null) return true;
-    return now.difference(last).inDays > 30;
-  }
-}
-
-/// The officer roster and how the fleet's scoring is spread across it.
+/// The roster: every registered account, and how the fleet's scoring is
+/// spread across the people doing the work.
 class EvaluatorsPage extends StatefulWidget {
   const EvaluatorsPage({super.key});
 
@@ -58,6 +21,7 @@ class EvaluatorsPage extends StatefulWidget {
 
 class _EvaluatorsPageState extends State<EvaluatorsPage> {
   late Future<FleetData> _future;
+  String? _selectedUid;
 
   @override
   void initState() {
@@ -95,21 +59,71 @@ class _EvaluatorsPageState extends State<EvaluatorsPage> {
 
         final data = snapshot.data!;
         final now = DateTime.now();
-        final stats = _build(data);
+        final stats = OfficerStats.buildAll(data);
 
-        // Evaluators only for the spread — an admin who scores nothing
-        // would otherwise drag the calibration numbers around.
+        // Evaluators only — an admin who scores nothing would drag the
+        // calibration figures around without meaning anything.
         final scorers = stats
             .where((s) => !s.user.isAdmin && s.avgScoreGiven != null)
             .toList();
         final averages = scorers.map((s) => s.avgScoreGiven!).toList()..sort();
+        final fleetAverage = averages.isEmpty
+            ? null
+            : averages.reduce((a, b) => a + b) / averages.length;
+
+        if (_selectedUid != null) {
+          final match =
+              stats.where((s) => s.user.uid == _selectedUid).toList();
+          if (match.isNotEmpty) {
+            return EvaluatorDetailPage(
+              stats: match.first,
+              fleetAverage: fleetAverage,
+              onBack: () => setState(() => _selectedUid = null),
+            );
+          }
+          WidgetsBinding.instance.addPostFrameCallback(
+              (_) => setState(() => _selectedUid = null));
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _Headline(stats: stats, averages: averages, now: now),
+            const SizedBox(height: 16),
+            _Grid(
+              stats: stats,
+              now: now,
+              fleetAverage: fleetAverage,
+              onOpen: (s) => setState(() => _selectedUid = s.user.uid),
+            ),
             const SizedBox(height: 14),
-            _Table(stats: stats, now: now),
+            Row(
+              children: [
+                Text(
+                  '${stats.length} accounts · '
+                  '${stats.where((s) => !s.user.isAdmin).length} evaluators, '
+                  '${stats.where((s) => s.user.isAdmin).length} admin',
+                  style: AppTheme.mono(size: 12, color: AppColors.muted),
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: data.evaluations.isEmpty
+                      ? null
+                      : () => ExportService.downloadCsv(
+                            table: ExportTables.officerActivity(
+                                data.evaluations),
+                            filename:
+                                ExportService.stamped('cm-officer-activity'),
+                          ),
+                  icon: const Icon(Icons.download_outlined, size: 15),
+                  label: const Text('Export'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 14),
             Panel(
               child: Row(
@@ -123,8 +137,8 @@ class _EvaluatorsPageState extends State<EvaluatorsPage> {
                       'Average score given is a calibration signal, not a '
                       'performance measure. A high average may mean lenient '
                       'scoring rather than better farms — read it against the '
-                      'spread, and only look closer at an officer sitting well '
-                      'outside the pack.',
+                      'spread, and only look closer at an officer sitting '
+                      'well outside the pack.',
                       style: TextStyle(
                           fontSize: 12.5,
                           color: AppColors.muted,
@@ -138,30 +152,6 @@ class _EvaluatorsPageState extends State<EvaluatorsPage> {
         );
       },
     );
-  }
-
-  List<OfficerStats> _build(FleetData data) {
-    final byEo = <String, List<Evaluation>>{};
-    for (final v in data.evaluations) {
-      byEo.putIfAbsent(v.eoId, () => []).add(v);
-    }
-
-    final registered = <String, int>{};
-    for (final f in data.farms) {
-      registered[f.createdBy] = (registered[f.createdBy] ?? 0) + 1;
-    }
-
-    final rows = data.users
-        .map((u) => OfficerStats(
-              user: u,
-              visits: byEo[u.uid] ?? const [],
-              farmsRegistered: registered[u.uid] ?? 0,
-            ))
-        .toList();
-
-    // Most active first; admins with no fieldwork settle at the bottom.
-    rows.sort((a, b) => b.visitCount.compareTo(a.visitCount));
-    return rows;
   }
 }
 
@@ -187,14 +177,13 @@ class _Headline extends StatelessWidget {
         ? null
         : (counts.length.isOdd
             ? counts[counts.length ~/ 2].toDouble()
-            : (counts[counts.length ~/ 2 - 1] + counts[counts.length ~/ 2]) /
+            : (counts[counts.length ~/ 2 - 1] +
+                    counts[counts.length ~/ 2]) /
                 2);
 
-    final spread =
-        averages.length < 2 ? null : averages.last - averages.first;
-
+    final spread = averages.length < 2 ? null : averages.last - averages.first;
     final width = MediaQuery.sizeOf(context).width;
-    final columns = width >= 900 ? 3 : (width >= 560 ? 3 : 1);
+    final columns = width >= 620 ? 3 : 1;
 
     return GridView.count(
       crossAxisCount: columns,
@@ -229,8 +218,8 @@ class _Headline extends StatelessWidget {
           value: spread == null ? '—' : spread.toStringAsFixed(1),
           subline: spread == null
               ? 'needs two scoring officers'
-              : '${averages.first.toStringAsFixed(1)} lowest → '
-                  '${averages.last.toStringAsFixed(1)} highest',
+              : '${averages.first.toStringAsFixed(1)} → '
+                  '${averages.last.toStringAsFixed(1)}',
           // A wide spread means officers are not applying the rubric the
           // same way, which quietly undermines every other figure.
           sublineColor: spread != null && spread > 4 ? AppColors.amber : null,
@@ -240,119 +229,69 @@ class _Headline extends StatelessWidget {
   }
 }
 
-class _Table extends StatelessWidget {
-  const _Table({required this.stats, required this.now});
+class _Grid extends StatelessWidget {
+  const _Grid({
+    required this.stats,
+    required this.now,
+    required this.fleetAverage,
+    required this.onOpen,
+  });
 
   final List<OfficerStats> stats;
   final DateTime now;
+  final double? fleetAverage;
+  final ValueChanged<OfficerStats> onOpen;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minWidth: MediaQuery.sizeOf(context).width > 900
-                    ? MediaQuery.sizeOf(context).width - 300
-                    : 780,
-              ),
-              child: Column(
-                children: [
-                  const _HeaderRow(),
-                  for (final s in stats) _Row(stats: s, now: now),
-                ],
-              ),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: AppColors.border)),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  '${stats.length} accounts · '
-                  '${stats.where((s) => !s.user.isAdmin).length} evaluators, '
-                  '${stats.where((s) => s.user.isAdmin).length} admin',
-                  style:
-                      const TextStyle(fontSize: 12, color: AppColors.muted),
+    final width = MediaQuery.sizeOf(context).width;
+    final columns = width >= 1180 ? 3 : (width >= 760 ? 2 : 1);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const gap = 14.0;
+        final cardWidth =
+            (constraints.maxWidth - gap * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final s in stats)
+              SizedBox(
+                width: cardWidth,
+                child: _OfficerCard(
+                  stats: s,
+                  now: now,
+                  fleetAverage: fleetAverage,
+                  onTap: () => onOpen(s),
                 ),
-                const Spacer(),
-                OutlinedButton.icon(
-                  onPressed: stats.isEmpty
-                      ? null
-                      : () => ExportService.downloadCsv(
-                            table: ExportTables.officerActivity(
-                              stats.expand((s) => s.visits).toList(),
-                            ),
-                            filename:
-                                ExportService.stamped('cm-officer-activity'),
-                          ),
-                  icon: const Icon(Icons.download_outlined, size: 15),
-                  label: const Text('Export'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
 
-class _HeaderRow extends StatelessWidget {
-  const _HeaderRow();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        children: [
-          Expanded(flex: 3, child: Text('OFFICER', style: AppTheme.eyebrow)),
-          SizedBox(width: 92, child: Text('ROLE', style: AppTheme.eyebrow)),
-          SizedBox(width: 60, child: Text('VISITS', style: AppTheme.eyebrow)),
-          SizedBox(width: 60, child: Text('FARMS', style: AppTheme.eyebrow)),
-          SizedBox(
-              width: 96, child: Text('AVG GIVEN', style: AppTheme.eyebrow)),
-          SizedBox(
-              width: 110, child: Text('LAST ACTIVE', style: AppTheme.eyebrow)),
-          SizedBox(width: 76, child: Text('STATUS', style: AppTheme.eyebrow)),
-          if (SessionService.isAdmin) const SizedBox(width: 76),
-        ],
-      ),
-    );
-  }
-}
-
-class _Row extends StatefulWidget {
-  const _Row({required this.stats, required this.now});
+class _OfficerCard extends StatefulWidget {
+  const _OfficerCard({
+    required this.stats,
+    required this.now,
+    required this.fleetAverage,
+    required this.onTap,
+  });
 
   final OfficerStats stats;
   final DateTime now;
+  final double? fleetAverage;
+  final VoidCallback onTap;
 
   @override
-  State<_Row> createState() => _RowState();
+  State<_OfficerCard> createState() => _OfficerCardState();
 }
 
-class _RowState extends State<_Row> {
+class _OfficerCardState extends State<_OfficerCard> {
   bool _hover = false;
 
   @override
@@ -360,23 +299,33 @@ class _RowState extends State<_Row> {
     final s = widget.stats;
     final u = s.user;
     final avg = s.avgScoreGiven;
+    final perMonth = s.avgVisitsPerMonth(widget.now);
     final idle = s.isIdle(widget.now);
 
     return MouseRegion(
+      cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-        color: _hover ? const Color(0xFF232323) : Colors.transparent,
-        child: Row(
-          children: [
-            Expanded(
-              flex: 3,
-              child: Row(
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: _hover ? const Color(0xFF232323) : AppColors.surface,
+            border: Border.all(
+                color: _hover ? const Color(0xFF4A4A4A) : AppColors.border),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
                 children: [
                   Container(
-                    width: 28,
-                    height: 28,
+                    width: 38,
+                    height: 38,
                     decoration: BoxDecoration(
                       color: AppColors.fill,
                       shape: BoxShape.circle,
@@ -385,171 +334,143 @@ class _RowState extends State<_Row> {
                     alignment: Alignment.center,
                     child: Text(u.initials,
                         style: AppTheme.mono(
-                            size: 10.5, color: AppColors.text2)),
+                            size: 13, color: AppColors.text2)),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(u.displayName,
                             style: const TextStyle(
-                                fontSize: 13, fontWeight: FontWeight.w500),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600),
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis),
                         const SizedBox(height: 2),
                         Text(u.username,
                             style: const TextStyle(
                                 fontSize: 11.5, color: AppColors.muted),
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis),
                       ],
                     ),
                   ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: u.isAdmin
+                          ? AppColors.amberDark
+                          : AppColors.fill,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(u.roleLabel,
+                        style: AppTheme.mono(
+                            size: 9.5,
+                            color: u.isAdmin
+                                ? AppColors.amber
+                                : AppColors.muted)),
+                  ),
                 ],
               ),
-            ),
-            SizedBox(
-              width: 92,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              const SizedBox(height: 14),
+
+              if (!s.hasVisits)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 14),
                   decoration: BoxDecoration(
-                    color: u.isAdmin ? AppColors.amberDark : AppColors.fill,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(u.roleLabel,
-                      style: AppTheme.mono(
-                          size: 10,
-                          color:
-                              u.isAdmin ? AppColors.amber : AppColors.muted)),
-                ),
-              ),
-            ),
-            SizedBox(
-              width: 60,
-              child: Text('${s.visitCount}',
-                  style: AppTheme.mono(size: 12.5, color: AppColors.text)),
-            ),
-            SizedBox(
-              width: 60,
-              child: Text('${s.farmsRegistered}',
-                  style: AppTheme.mono(size: 12.5, color: AppColors.text2)),
-            ),
-            SizedBox(
-              width: 96,
-              child: avg == null
-                  ? Text('—',
-                      style:
-                          AppTheme.mono(size: 12.5, color: AppColors.muted))
-                  : Row(
-                      children: [
-                        Text(avg.toStringAsFixed(1),
-                            style: AppTheme.mono(
-                                size: 12.5,
-                                color: AppColors.forTotalScore(avg.round()))),
-                        const SizedBox(width: 6),
-                        Text('/ 35',
-                            style: AppTheme.mono(
-                                size: 10, color: AppColors.muted)),
-                      ],
-                    ),
-            ),
-            SizedBox(
-              width: 110,
-              child: Text(Fmt.relative(s.lastActive, now: widget.now),
-                  style: const TextStyle(
-                      fontSize: 12.5, color: AppColors.text2),
-                  overflow: TextOverflow.ellipsis),
-            ),
-            SizedBox(
-              width: 76,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: !u.active
-                        ? const Color(0xFF3D211C)
-                        : (idle ? AppColors.fill : AppColors.greenDark),
-                    borderRadius: BorderRadius.circular(999),
+                    color: AppColors.fill,
+                    borderRadius: BorderRadius.circular(9),
                   ),
                   child: Text(
-                    !u.active ? 'OFF' : (idle ? 'IDLE' : 'ACTIVE'),
-                    style: AppTheme.mono(
-                      size: 10,
-                      color: !u.active
-                          ? AppColors.orange
-                          : (idle ? AppColors.muted : AppColors.greenLight),
-                    ),
+                    s.farmsRegistered > 0
+                        ? 'No visits · ${s.farmsRegistered} farms registered'
+                        : 'No visits submitted',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.muted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-              ),
-            ),
-            if (SessionService.isAdmin)
-              SizedBox(
-                width: 76,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                )
+              else ...[
+                Row(
                   children: [
-                    _IconAction(
-                      icon: Icons.admin_panel_settings_outlined,
-                      tooltip: u.isAdmin
-                          ? 'Demote to evaluator'
-                          : 'Promote to admin',
-                      onTap: () => _soon(context),
+                    _Metric(label: 'Visits', value: '${s.visitCount}'),
+                    _Metric(label: 'Farms', value: '${s.distinctFarms}'),
+                    _Metric(
+                      label: 'Avg given',
+                      value: avg!.toStringAsFixed(1),
+                      color: AppColors.forTotalScore(avg.round()),
                     ),
-                    _IconAction(
-                      icon: Icons.block,
-                      tooltip: u.active ? 'Deactivate' : 'Reactivate',
-                      danger: true,
-                      onTap: () => _soon(context),
+                    _Metric(
+                      label: 'Per month',
+                      value: perMonth!.toStringAsFixed(1),
                     ),
                   ],
                 ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+              ],
 
-  void _soon(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Account changes are not built yet.'),
-        backgroundColor: AppColors.fill,
-        behavior: SnackBarBehavior.floating,
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Icon(
+                    !u.active
+                        ? Icons.block
+                        : (idle ? Icons.schedule : Icons.circle),
+                    size: !u.active ? 13 : (idle ? 13 : 8),
+                    color: !u.active
+                        ? AppColors.orange
+                        : (idle ? AppColors.muted : AppColors.greenLight),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      !u.active
+                          ? 'Deactivated'
+                          : 'Last active ${Fmt.relative(s.lastActive, now: widget.now)}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: !u.active
+                            ? AppColors.orange
+                            : AppColors.muted,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-class _IconAction extends StatelessWidget {
-  const _IconAction({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-    this.danger = false,
-  });
+class _Metric extends StatelessWidget {
+  const _Metric({required this.label, required this.value, this.color});
 
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-  final bool danger;
+  final String label;
+  final String value;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      onPressed: onTap,
-      tooltip: tooltip,
-      icon: Icon(icon, size: 16),
-      color: danger ? AppColors.muted : AppColors.muted,
-      hoverColor: danger ? const Color(0xFF2A1512) : AppColors.fill,
-      padding: const EdgeInsets.all(6),
-      constraints: const BoxConstraints(),
-      visualDensity: VisualDensity.compact,
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(value,
+              style: AppTheme.mono(size: 15, color: color ?? AppColors.text)),
+          const SizedBox(height: 2),
+          Text(label.toUpperCase(), style: AppTheme.eyebrow),
+        ],
+      ),
     );
   }
 }

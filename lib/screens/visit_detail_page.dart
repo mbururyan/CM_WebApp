@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/evaluation.dart';
+import '../services/pdf_report.dart';
 import '../services/session_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
@@ -68,6 +69,7 @@ class VisitDetailPage extends StatelessWidget {
                 ],
               ),
             ),
+            _PdfButton(visit: visit),
             if (onDelete != null)
               OutlinedButton.icon(
                 onPressed: onDelete,
@@ -608,3 +610,61 @@ class _Muted extends StatelessWidget {
 /// Convenience so callers don't have to repeat the admin check.
 VoidCallback? deleteHandlerFor(VoidCallback action) =>
     SessionService.isAdmin ? action : null;
+
+/// Generates the farmer-facing one-page report.
+///
+/// Stateful only to hold the busy flag — building a PDF blocks the isolate
+/// for a moment, and a button that looks idle while nothing happens reads
+/// as broken.
+class _PdfButton extends StatefulWidget {
+  const _PdfButton({required this.visit});
+
+  final Evaluation visit;
+
+  @override
+  State<_PdfButton> createState() => _PdfButtonState();
+}
+
+class _PdfButtonState extends State<_PdfButton> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    setState(() => _busy = true);
+    try {
+      // Let the spinner paint before the encoder takes the frame.
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+      await PdfReport.download(widget.visit);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not build the PDF: $e'),
+            backgroundColor: const Color(0xFF2A1512),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.icon(
+      onPressed: _busy ? null : _run,
+      icon: _busy
+          ? const SizedBox(
+              width: 15,
+              height: 15,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white),
+            )
+          : const Icon(Icons.picture_as_pdf_outlined, size: 16),
+      label: const Text('Download report'),
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      ),
+    );
+  }
+}

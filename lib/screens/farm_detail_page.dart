@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../models/evaluation.dart';
-import '../models/farm.dart';
 import '../services/admin_service.dart';
+import '../services/farm_stats.dart';
 import '../services/session_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
@@ -11,24 +11,19 @@ import '../widgets/confirm_delete.dart';
 import '../widgets/panel.dart';
 import 'visit_detail_page.dart';
 
-/// One farm: its details, its score history, and every visit made to it.
+/// One farm: summary analytics, its section profile, and every visit.
 class FarmDetailPage extends StatefulWidget {
   const FarmDetailPage({
     super.key,
-    required this.farm,
-    required this.visits,
+    required this.stats,
     required this.onBack,
     required this.onChanged,
   });
 
-  final Farm farm;
-
-  /// Every submitted visit to this farm. Order doesn't matter — sorted here.
-  final List<Evaluation> visits;
-
+  final FarmStats stats;
   final VoidCallback onBack;
 
-  /// Called after a delete so the parent re-reads and this page pops.
+  /// Called after a delete so the parent re-reads.
   final VoidCallback onChanged;
 
   @override
@@ -37,17 +32,6 @@ class FarmDetailPage extends StatefulWidget {
 
 class _FarmDetailPageState extends State<FarmDetailPage> {
   Evaluation? _selected;
-
-  List<Evaluation> get _ordered {
-    final list = [...widget.visits]..sort((a, b) {
-        final byDate = a.evaluationDate.compareTo(b.evaluationDate);
-        if (byDate != 0) return byDate;
-        final x = a.createdAt, y = b.createdAt;
-        if (x == null || y == null) return 0;
-        return x.compareTo(y);
-      });
-    return list;
-  }
 
   Future<void> _deleteVisit(Evaluation v) async {
     final reason = await ConfirmDelete.show(
@@ -78,13 +62,12 @@ class _FarmDetailPageState extends State<FarmDetailPage> {
     }
   }
 
-  Future<void> _deleteFarm(Farm f, bool hasVisits) async {
-    // Caught here as well as in the service, so the user gets the reason
-    // before typing anything rather than after.
-    if (hasVisits) {
+  Future<void> _deleteFarm() async {
+    final s = widget.stats;
+    if (s.everVisited) {
       _toast(
-        'This farm has visits attached. Delete those first — otherwise they '
-        'would be left pointing at a farm that no longer exists.',
+        'This farm has ${s.visitCount} visits attached. Delete those first — '
+        'otherwise they would point at a farm that no longer exists.',
         bad: true,
       );
       return;
@@ -93,8 +76,8 @@ class _FarmDetailPageState extends State<FarmDetailPage> {
     final reason = await ConfirmDelete.show(
       context,
       title: 'Delete this farm?',
-      subject: [f.name, f.locationArea, f.county]
-          .where((s) => s.isNotEmpty)
+      subject: [s.farm.name, s.farm.locationArea, s.farm.county]
+          .where((x) => x.isNotEmpty)
           .join(' · '),
       consequence:
           'The farm is removed from the register. It has no visits attached, '
@@ -105,8 +88,8 @@ class _FarmDetailPageState extends State<FarmDetailPage> {
 
     try {
       await AdminService.deleteFarm(
-        farmId: f.id,
-        summary: '${f.name} · ${f.county}',
+        farmId: s.farm.id,
+        summary: '${s.farm.name} · ${s.farm.county}',
         reason: reason,
       );
       if (!mounted) return;
@@ -131,21 +114,20 @@ class _FarmDetailPageState extends State<FarmDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    // A visit opened from here returns here, not to the farms table.
+    // A visit opened from here returns here, not to the farms grid.
     if (_selected != null) {
       return VisitDetailPage(
         visit: _selected!,
         onBack: () => setState(() => _selected = null),
-        onDelete: SessionService.isAdmin
-            ? () => _deleteVisit(_selected!)
-            : null,
+        onDelete:
+            SessionService.isAdmin ? () => _deleteVisit(_selected!) : null,
       );
     }
 
-    final f = widget.farm;
-    final visits = _ordered;
-    final latest = visits.isEmpty ? null : visits.last;
+    final s = widget.stats;
+    final f = s.farm;
     final isWide = MediaQuery.sizeOf(context).width >= Layout.wideBreakpoint;
+    final now = DateTime.now();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -164,89 +146,97 @@ class _FarmDetailPageState extends State<FarmDetailPage> {
         ),
         const SizedBox(height: 16),
 
-        Text(
-          f.name,
-          style: const TextStyle(
-              fontSize: 22, fontWeight: FontWeight.w600, letterSpacing: -0.4),
-        ),
-        const SizedBox(height: 5),
-        Text(
-          [f.locationArea, f.subCounty, f.county, f.systemLabel]
-              .where((s) => s.isNotEmpty && s != '—')
-              .join(' · '),
-          style: const TextStyle(fontSize: 12.5, color: AppColors.muted),
-        ),
-        if (SessionService.isAdmin) ...[
-          const SizedBox(height: 14),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: () => _deleteFarm(f, visits.isNotEmpty),
-              icon: const Icon(Icons.delete_outline, size: 16),
-              label: const Text('Delete farm'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.orange,
-                backgroundColor: Colors.transparent,
-                side: const BorderSide(color: Color(0xFF5A2B26)),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(f.name,
+                      style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: -0.4)),
+                  const SizedBox(height: 5),
+                  Text(
+                    [f.locationArea, f.subCounty, f.county, f.systemLabel]
+                        .where((x) => x.isNotEmpty && x != '—')
+                        .join(' · '),
+                    style: const TextStyle(
+                        fontSize: 12.5, color: AppColors.muted),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+            if (SessionService.isAdmin)
+              OutlinedButton.icon(
+                onPressed: _deleteFarm,
+                icon: const Icon(Icons.delete_outline, size: 16),
+                label: const Text('Delete'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.orange,
+                  backgroundColor: Colors.transparent,
+                  side: const BorderSide(color: Color(0xFF5A2B26)),
+                ),
+              ),
+          ],
+        ),
         const SizedBox(height: 18),
 
-        // ---- details + latest snapshot ----
+        // ---- summary analytics ----
+        if (s.everVisited) ...[
+          _SummaryStrip(stats: s, now: now),
+          const SizedBox(height: 14),
+        ],
+
         _TwoUp(
           isWide: isWide,
-          left: Panel(
-            title: 'Farm details',
-            child: _Details(farm: f),
-          ),
+          left: Panel(title: 'Farm details', child: _Details(stats: s)),
           right: Panel(
-            title: latest == null ? 'No visits yet' : 'As of the last visit',
-            note: latest == null
-                ? 'This farm has been registered but never evaluated.'
-                : Fmt.date(latest.evaluationDate),
-            child: latest == null
-                ? const Text(
-                    'Once an officer submits an evaluation, its score and '
-                    'herd counts appear here.',
+            title: 'Section profile',
+            note: s.everVisited
+                ? 'Averaged across all ${s.visitCount} '
+                    '${s.visitCount == 1 ? "visit" : "visits"}, worst first.'
+                : 'Nothing recorded yet.',
+            child: s.everVisited
+                ? _SectionProfile(stats: s)
+                : const Text(
+                    'Once an officer submits an evaluation, the section '
+                    'breakdown appears here.',
                     style: TextStyle(
                         fontSize: 13, color: AppColors.text2, height: 1.6),
-                  )
-                : _LatestSnapshot(latest: latest),
+                  ),
           ),
         ),
         const SizedBox(height: 14),
 
-        // ---- score history ----
-        if (visits.length >= 2) ...[
+        if (s.visitCount >= 2) ...[
           Panel(
             title: 'Score history',
-            note: '${visits.length} visits, oldest first',
-            child: _History(visits: visits),
+            note: '${s.visitCount} visits, oldest first',
+            child: _History(visits: s.visits),
           ),
           const SizedBox(height: 14),
         ],
 
-        // ---- visit list ----
         Panel(
           title: 'Visits',
-          note: visits.isEmpty
-              ? 'Nothing recorded'
-              : 'Newest first — open one for the full evaluation',
-          child: visits.isEmpty
-              ? const Text(
-                  'No submitted visits.',
-                  style: TextStyle(fontSize: 12.5, color: AppColors.muted),
-                )
+          note: s.everVisited
+              ? 'Newest first — open one for the full evaluation'
+              : 'Nothing recorded',
+          child: !s.everVisited
+              ? const Text('No submitted visits.',
+                  style: TextStyle(fontSize: 12.5, color: AppColors.muted))
               : Column(
                   children: [
-                    for (var i = visits.length - 1; i >= 0; i--)
+                    for (var i = s.visits.length - 1; i >= 0; i--)
                       _VisitRow(
-                        visit: visits[i],
-                        previous: i > 0 ? visits[i - 1] : null,
+                        visit: s.visits[i],
+                        previous: i > 0 ? s.visits[i - 1] : null,
                         isLast: i == 0,
-                        onTap: () => setState(() => _selected = visits[i]),
+                        onTap: () =>
+                            setState(() => _selected = s.visits[i]),
                       ),
                   ],
                 ),
@@ -256,22 +246,142 @@ class _FarmDetailPageState extends State<FarmDetailPage> {
   }
 }
 
-class _Details extends StatelessWidget {
-  const _Details({required this.farm});
+/// Herd, average, latest, weakest, strongest — the five numbers that answer
+/// "how is this farm doing" without opening a single visit.
+class _SummaryStrip extends StatelessWidget {
+  const _SummaryStrip({required this.stats, required this.now});
 
-  final Farm farm;
+  final FarmStats stats;
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final columns = width >= 1080 ? 5 : (width >= 620 ? 3 : 2);
+    final s = stats;
+
+    return GridView.count(
+      crossAxisCount: columns,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 14,
+      crossAxisSpacing: 14,
+      childAspectRatio: 1.72,
+      children: [
+        KpiTile(
+          label: 'Herd size',
+          value: Fmt.thousands(s.herdSize ?? 0),
+          subline: 'at ${Fmt.shortDate(s.latest!.evaluationDate)}',
+        ),
+        KpiTile(
+          label: 'Average score',
+          value: s.averageScore!.toStringAsFixed(1),
+          suffix: ' / 35',
+          subline: 'across ${s.visitCount} '
+              '${s.visitCount == 1 ? "visit" : "visits"}',
+        ),
+        KpiTile(
+          label: 'Latest score',
+          value: '${s.latestScore}',
+          suffix: ' / 35',
+          subline: s.trend == null
+              ? Fmt.relative(s.latest!.evaluationDate, now: now)
+              : '${s.trend! >= 0 ? '+' : ''}${s.trend} on previous visit',
+          sublineColor: s.trend == null
+              ? null
+              : (s.trend! >= 0 ? AppColors.greenLight : AppColors.orange),
+        ),
+        KpiTile(
+          label: 'Weakest',
+          value: s.weakest!.value.toStringAsFixed(1),
+          subline: Sections.label(s.weakest!.key),
+          sublineColor: AppColors.orange,
+        ),
+        KpiTile(
+          label: 'Strongest',
+          value: s.strongest!.value.toStringAsFixed(1),
+          subline: Sections.label(s.strongest!.key),
+          sublineColor: AppColors.greenLight,
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionProfile extends StatelessWidget {
+  const _SectionProfile({required this.stats});
+
+  final FarmStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = stats.sectionAverages;
+
+    return Column(
+      children: [
+        for (var i = 0; i < rows.length; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 150,
+                  child: Text(
+                    Sections.label(rows[i].key),
+                    style: const TextStyle(
+                        fontSize: 12.5, color: AppColors.text2),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: (rows[i].value / 5).clamp(0.0, 1.0),
+                      minHeight: 7,
+                      backgroundColor: const Color(0xFF2A2A2A),
+                      valueColor: AlwaysStoppedAnimation(
+                          AppColors.forSectionScore(rows[i].value)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                SizedBox(
+                  width: 30,
+                  child: Text(
+                    rows[i].value.toStringAsFixed(1),
+                    textAlign: TextAlign.right,
+                    style: AppTheme.mono(
+                        size: 12.5,
+                        color: AppColors.forSectionScore(rows[i].value)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _Details extends StatelessWidget {
+  const _Details({required this.stats});
+
+  final FarmStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final f = stats.farm;
     final rows = <(String, String)>[
-      ('Owner / manager', farm.ownerManager),
-      ('Contact', farm.contactPhone),
-      ('County', farm.county),
-      ('Sub-county', farm.subCounty),
-      ('Village', farm.locationArea),
-      ('Production system', farm.systemLabel),
-      ('Registered by', farm.createdByName),
-      ('Registered on', Fmt.date(farm.createdAt)),
+      ('Owner / manager', f.ownerManager),
+      ('Contact', f.contactPhone),
+      ('County', f.county),
+      ('Sub-county', f.subCounty),
+      ('Village', f.locationArea),
+      ('Production system', f.systemLabel),
+      ('Registered by', f.createdByName),
+      ('Registered on', Fmt.date(f.createdAt)),
     ];
 
     return Column(
@@ -291,10 +401,8 @@ class _Details extends StatelessWidget {
                           fontSize: 12, color: AppColors.muted)),
                 ),
                 Expanded(
-                  child: Text(
-                    r.$2.isEmpty ? '—' : r.$2,
-                    style: const TextStyle(fontSize: 13),
-                  ),
+                  child: Text(r.$2.isEmpty ? '—' : r.$2,
+                      style: const TextStyle(fontSize: 13)),
                 ),
               ],
             ),
@@ -304,128 +412,8 @@ class _Details extends StatelessWidget {
   }
 }
 
-class _LatestSnapshot extends StatelessWidget {
-  const _LatestSnapshot({required this.latest});
-
-  final Evaluation latest;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = AppColors.forTotalScore(latest.totalScore);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            RichText(
-              text: TextSpan(
-                text: '${latest.totalScore}',
-                style: AppTheme.mono(size: 34, color: color)
-                    .copyWith(letterSpacing: -1.4, height: 1),
-                children: [
-                  TextSpan(
-                    text: ' / 35',
-                    style:
-                        AppTheme.mono(size: 14, color: AppColors.muted),
-                  ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(latest.ratingLabel.toUpperCase(),
-                  style: AppTheme.mono(size: 10.5, color: color)),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Text('HERD', style: AppTheme.eyebrow),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 20,
-          runSpacing: 10,
-          children: [
-            _Stat('Cows', latest.breedingCows),
-            _Stat('Bulls', latest.bulls),
-            _Stat('Calves', latest.calves),
-            _Stat('Growers', latest.growersSteers),
-            _Stat('Total', latest.totalHerd, color: AppColors.greenLight),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Text('WEAKEST SECTIONS', style: AppTheme.eyebrow),
-        const SizedBox(height: 8),
-        ..._weakest(latest).map(
-          (e) => Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(Sections.label(e.key),
-                      style: const TextStyle(
-                          fontSize: 12.5, color: AppColors.text2),
-                      overflow: TextOverflow.ellipsis),
-                ),
-                Text(
-                  '${e.value}',
-                  style: AppTheme.mono(
-                      size: 12.5,
-                      color: AppColors.forSectionScore(e.value)),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// The three lowest-scoring sections on this visit — where the farmer
-  /// should start, which is the question a manager actually asks.
-  static List<MapEntry<String, int>> _weakest(Evaluation v) {
-    final entries = v.sections.entries
-        .map((e) => MapEntry(e.key, e.value.score))
-        .toList()
-      ..sort((a, b) => a.value.compareTo(b.value));
-    return entries.take(3).toList();
-  }
-}
-
-class _Stat extends StatelessWidget {
-  const _Stat(this.label, this.value, {this.color});
-
-  final String label;
-  final int value;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(Fmt.thousands(value),
-            style: AppTheme.mono(size: 17, color: color ?? AppColors.text)),
-        const SizedBox(height: 2),
-        Text(label,
-            style: const TextStyle(fontSize: 11, color: AppColors.muted)),
-      ],
-    );
-  }
-}
-
-/// Total score per visit as vertical bars. Deliberately not a line chart:
-/// visits are irregular events, not a continuous series, and a line implies
-/// values existed between them.
+/// Total score per visit as columns. Not a line chart: visits are irregular
+/// events, and a line implies values existed between them.
 class _History extends StatelessWidget {
   const _History({required this.visits});
 
@@ -450,8 +438,8 @@ class _History extends StatelessWidget {
                             size: 11,
                             color: AppColors.forTotalScore(v.totalScore))),
                     const SizedBox(height: 6),
-                    // 35 is the maximum, so bar heights are comparable
-                    // across farms, not just within one.
+                    // Scaled against 35 so bars are comparable across farms,
+                    // not just within one.
                     Container(
                       height: (v.totalScore / 35 * 90).clamp(3, 90),
                       decoration: BoxDecoration(
@@ -463,11 +451,10 @@ class _History extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 7),
-                    Text(
-                      Fmt.shortDate(v.evaluationDate),
-                      style: AppTheme.mono(size: 9.5, color: AppColors.muted),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    Text(Fmt.shortDate(v.evaluationDate),
+                        style:
+                            AppTheme.mono(size: 9.5, color: AppColors.muted),
+                        overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
@@ -495,8 +482,8 @@ class _VisitRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = AppColors.forTotalScore(visit.totalScore);
 
-    // Only show a delta when the dates actually differ — two visits on the
-    // same day produce an arbitrary sign, which is the known mobile bug.
+    // Only show a delta when the dates differ — two visits on the same day
+    // produce an arbitrary sign.
     final showDelta = previous != null &&
         !_sameDay(previous!.evaluationDate, visit.evaluationDate);
     final delta = showDelta ? visit.totalScore - previous!.totalScore : null;
@@ -508,13 +495,12 @@ class _VisitRow extends StatelessWidget {
         decoration: BoxDecoration(
           border: isLast
               ? null
-              : const Border(
-                  bottom: BorderSide(color: Color(0xFF262626))),
+              : const Border(bottom: BorderSide(color: Color(0xFF262626))),
         ),
         child: Row(
           children: [
             SizedBox(
-              width: 100,
+              width: 108,
               child: Text(Fmt.date(visit.evaluationDate),
                   style: AppTheme.mono(size: 12, color: AppColors.text2)),
             ),
@@ -523,14 +509,22 @@ class _VisitRow extends StatelessWidget {
                   style: const TextStyle(fontSize: 13),
                   overflow: TextOverflow.ellipsis),
             ),
+            SizedBox(
+              width: 74,
+              child: Text('${Fmt.thousands(visit.totalHerd)} head',
+                  textAlign: TextAlign.right,
+                  style: AppTheme.mono(size: 11.5, color: AppColors.muted)),
+            ),
+            const SizedBox(width: 14),
             if (delta != null)
               Padding(
-                padding: const EdgeInsets.only(right: 14),
+                padding: const EdgeInsets.only(right: 12),
                 child: Text(
                   '${delta >= 0 ? '+' : ''}$delta',
                   style: AppTheme.mono(
                     size: 12,
-                    color: delta >= 0 ? AppColors.greenLight : AppColors.orange,
+                    color:
+                        delta >= 0 ? AppColors.greenLight : AppColors.orange,
                   ),
                 ),
               ),

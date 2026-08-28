@@ -5,9 +5,12 @@ import '../services/analytics.dart';
 import '../services/data_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
+import '../utils/formatters.dart';
+import '../widgets/charts.dart';
 import '../widgets/panel.dart';
 
-/// The dashboard's front page. Loads the fleet once, then renders.
+/// The dashboard's front page. Loads the fleet once, then re-slices it in
+/// memory as the date filter changes — no refetch, so the filter is instant.
 class OverviewPage extends StatefulWidget {
   const OverviewPage({super.key});
 
@@ -18,15 +21,17 @@ class OverviewPage extends StatefulWidget {
 class _OverviewPageState extends State<OverviewPage> {
   late Future<FleetData> _future;
 
+  /// Thirty days is the default: long enough to contain a working rhythm,
+  /// short enough that "recent" still means recent.
+  DateWindow _window = DateWindow.month;
+
   @override
   void initState() {
     super.initState();
     _future = DataService.loadAll();
   }
 
-  void _reload() {
-    setState(() => _future = DataService.loadAll());
-  }
+  void _reload() => setState(() => _future = DataService.loadAll());
 
   @override
   Widget build(BuildContext context) {
@@ -48,41 +53,75 @@ class _OverviewPageState extends State<OverviewPage> {
         }
 
         if (snapshot.hasError) {
-          return _ErrorPanel(
-            message: 'Could not load the data. ${snapshot.error}',
-            onRetry: _reload,
+          return Panel(
+            title: 'Could not load the dashboard',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${snapshot.error}',
+                    style: const TextStyle(
+                        fontSize: 13, color: AppColors.text2, height: 1.6)),
+                const SizedBox(height: 18),
+                OutlinedButton(
+                    onPressed: _reload, child: const Text('Try again')),
+              ],
+            ),
           );
         }
 
         final data = snapshot.data!;
-        if (data.evaluations.isEmpty && data.farms.isEmpty) {
-          return const _EmptyPanel();
+        if (data.farms.isEmpty && data.evaluations.isEmpty) {
+          return const Panel(
+            title: 'Nothing to show yet',
+            note: 'No farms or submitted visits have reached the database.',
+            child: Text(
+              'Once field officers submit visits from the mobile app, the '
+              'figures appear here automatically.',
+              style: TextStyle(
+                  fontSize: 13, color: AppColors.text2, height: 1.6),
+            ),
+          );
         }
 
-        return _Body(analytics: Analytics(data), onReload: _reload);
+        final a = Analytics(data, window: _window);
+        return _Body(
+          analytics: a,
+          window: _window,
+          onWindow: (w) => setState(() => _window = w),
+        );
       },
     );
   }
 }
 
 class _Body extends StatelessWidget {
-  const _Body({required this.analytics, required this.onReload});
+  const _Body({
+    required this.analytics,
+    required this.window,
+    required this.onWindow,
+  });
 
   final Analytics analytics;
-  final VoidCallback onReload;
+  final DateWindow window;
+  final ValueChanged<DateWindow> onWindow;
 
   @override
   Widget build(BuildContext context) {
     final a = analytics;
     final width = MediaQuery.sizeOf(context).width;
+    final isWide = width >= Layout.wideBreakpoint;
     final columns = width >= 1080 ? 5 : (width >= 620 ? 3 : 2);
 
     final avg = a.averageScore;
     final change = a.averageScoreChange;
+    final overdue = a.overdueFarms();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _FilterBar(window: window, onChanged: onWindow, visits: a.visitCount),
+        const SizedBox(height: 16),
+
         // ---- headline figures ----
         GridView.count(
           crossAxisCount: columns,
@@ -93,9 +132,9 @@ class _Body extends StatelessWidget {
           childAspectRatio: 1.72,
           children: [
             KpiTile(
-              label: 'Farms registered',
-              value: '${a.farmCount}',
-              subline: '${a.farmsCovered} visited at least once',
+              label: 'Total herd size',
+              value: Fmt.thousands(a.totalHead),
+              subline: '${a.farmsWithHerdData} farms counted',
             ),
             KpiTile(
               label: 'Visits',
@@ -106,39 +145,84 @@ class _Body extends StatelessWidget {
               label: 'Average score',
               value: avg == null ? '—' : avg.toStringAsFixed(1),
               suffix: avg == null ? null : ' / 35',
-              subline: _changeText(change),
+              subline: _changeText(change, window),
               sublineColor: change == null
                   ? null
                   : (change >= 0 ? AppColors.greenLight : AppColors.orange),
             ),
             KpiTile(
-              label: 'Head overseen',
-              value: _thousands(a.totalHead),
-              subline: 'latest visit per farm',
+              label: 'Farms registered',
+              value: '${a.farmCount}',
+              subline: '${a.farmsCovered} visited in this period',
             ),
             KpiTile(
-              label: 'Farms covered',
-              value: '${a.farmsCovered}',
-              suffix: ' / ${a.farmCount}',
-              subline: '${a.overdueFarms().length} need a visit',
-              sublineColor:
-                  a.overdueFarms().isEmpty ? null : AppColors.amber,
+              label: 'Need a visit',
+              value: '${overdue.length}',
+              subline: 'over ${a.overdueDays} days, or never',
+              sublineColor: overdue.isEmpty ? null : AppColors.amber,
             ),
           ],
         ),
         const SizedBox(height: 14),
 
-        // ---- the signature block ----
+        // ---- visits by evaluator ----
+        Panel(
+          title: 'Visits by evaluator',
+          note: 'Submitted visits in this period.',
+          child: HorizontalBars(
+            slices: a.visitsByEvaluator,
+            labelWidth: isWide ? 150 : 110,
+            emptyMessage: 'No visits in this period.',
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // ---- herd by farm ----
+        Panel(
+          title: 'Herd size by farm',
+          note: a.herdByFarm().length >= 15
+              ? "Top 15 farms, each from its most recent visit in this period."
+              : "Each farm's most recent visit in this period.",
+          child: VerticalBars(
+            slices: a.herdByFarm(),
+            emptyMessage: 'No farms were visited in this period.',
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // ---- herd by county + rating mix ----
+        _TwoUp(
+          isWide: isWide,
+          left: Panel(
+            title: 'Herd size by county',
+            note: 'Latest visit per farm, summed.',
+            child: HorizontalBars(
+              slices: a.herdByCounty,
+              labelWidth: isWide ? 120 : 100,
+              emptyMessage: 'No farms were visited in this period.',
+            ),
+          ),
+          right: Panel(
+            title: 'Visits by rating',
+            note: 'Banded from the score, using the thresholds in Settings.',
+            child: DonutChart(
+              centreLabel: 'VISITS',
+              entries: _ratingEntries(a.ratingMix),
+              emptyMessage: 'No visits in this period.',
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // ---- section ranking ----
         Panel(
           title: 'Where the herd is weakest',
           note: 'Average score per section across '
-              '${a.visitCount} submitted ${a.visitCount == 1 ? "visit" : "visits"}, '
+              '${a.visitCount} ${a.visitCount == 1 ? "visit" : "visits"}, '
               'worst first.',
           child: a.sectionRanking.isEmpty
-              ? const Text(
-                  'No section scores recorded yet.',
-                  style: TextStyle(fontSize: 13, color: AppColors.muted),
-                )
+              ? const Text('No section scores in this period.',
+                  style: TextStyle(fontSize: 12.5, color: AppColors.muted))
               : Column(
                   children: [
                     for (var i = 0; i < a.sectionRanking.length; i++)
@@ -150,36 +234,134 @@ class _Body extends StatelessWidget {
                   ],
                 ),
         ),
-        const SizedBox(height: 14),
-
-        // ---- recent visits ----
-        Panel(
-          title: 'Recent visits',
-          note: 'Newest first',
-          child: _RecentList(visits: a.recentVisits()),
-        ),
       ],
     );
   }
 
-  static String _changeText(double? change) {
-    if (change == null) return 'not enough history yet';
-    final sign = change >= 0 ? '+' : '';
-    return '$sign${change.toStringAsFixed(1)} vs previous 30 days';
-  }
+  /// Poor to excellent, on the score ramp, so the colours mean the same
+  /// thing here as they do everywhere else in the app.
+  static List<(String, int, Color)> _ratingEntries(Map<String, int> mix) => [
+        ('Poor', mix['poor'] ?? 0, AppColors.scoreRamp[0]),
+        ('Fair', mix['fair'] ?? 0, AppColors.scoreRamp[2]),
+        ('Good', mix['good'] ?? 0, AppColors.scoreRamp[3]),
+        ('Excellent', mix['excellent'] ?? 0, AppColors.scoreRamp[4]),
+      ];
 
-  static String _thousands(int n) {
-    final s = n.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
-    }
-    return buf.toString();
+  static String _changeText(double? change, DateWindow w) {
+    if (w == DateWindow.all) return 'across all visits';
+    if (change == null) return 'no earlier period to compare';
+    final sign = change >= 0 ? '+' : '';
+    return '$sign${change.toStringAsFixed(1)} vs previous ${w.days} days';
   }
 }
 
-/// One section in the weakness ranking: position, label, bar, score.
+/// The date filter. A menu behind an icon rather than five buttons in a
+/// row — it is set once and then ignored, so it should not shout.
+class _FilterBar extends StatelessWidget {
+  const _FilterBar({
+    required this.window,
+    required this.onChanged,
+    required this.visits,
+  });
+
+  final DateWindow window;
+  final ValueChanged<DateWindow> onChanged;
+  final int visits;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        PopupMenuButton<DateWindow>(
+          tooltip: 'Change the date range',
+          onSelected: onChanged,
+          color: AppColors.surface,
+          position: PopupMenuPosition.under,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: const BorderSide(color: AppColors.border),
+          ),
+          itemBuilder: (context) => [
+            for (final w in DateWindow.values)
+              PopupMenuItem(
+                value: w,
+                height: 40,
+                child: Row(
+                  children: [
+                    Icon(
+                      w == window ? Icons.check : null,
+                      size: 15,
+                      color: AppColors.greenLight,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(w.label, style: const TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+          ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.fill,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.filter_list,
+                    size: 17, color: AppColors.text2),
+                const SizedBox(width: 9),
+                Text(window.label, style: const TextStyle(fontSize: 13)),
+                const SizedBox(width: 6),
+                const Icon(Icons.expand_more,
+                    size: 16, color: AppColors.muted),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          '$visits ${visits == 1 ? "visit" : "visits"}',
+          style: AppTheme.mono(size: 12, color: AppColors.muted),
+        ),
+      ],
+    );
+  }
+}
+
+class _TwoUp extends StatelessWidget {
+  const _TwoUp({
+    required this.isWide,
+    required this.left,
+    required this.right,
+  });
+
+  final bool isWide;
+  final Widget left;
+  final Widget right;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isWide) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [left, const SizedBox(height: 14), right],
+      );
+    }
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: left),
+          const SizedBox(width: 14),
+          Expanded(child: right),
+        ],
+      ),
+    );
+  }
+}
+
 class _RankRow extends StatelessWidget {
   const _RankRow({
     required this.position,
@@ -200,19 +382,14 @@ class _RankRow extends StatelessWidget {
       decoration: BoxDecoration(
         border: isLast
             ? null
-            : const Border(
-                bottom: BorderSide(color: Color(0xFF2A2A2A)),
-              ),
+            : const Border(bottom: BorderSide(color: Color(0xFF2A2A2A))),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           SizedBox(
             width: 26,
-            child: Text(
-              position.toString().padLeft(2, '0'),
-              style: AppTheme.mono(size: 11, color: AppColors.muted),
-            ),
+            child: Text(position.toString().padLeft(2, '0'),
+                style: AppTheme.mono(size: 11, color: AppColors.muted)),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -222,17 +399,14 @@ class _RankRow extends StatelessWidget {
                 Row(
                   children: [
                     Flexible(
-                      child: Text(
-                        row.label,
-                        style: const TextStyle(fontSize: 13),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      child: Text(row.label,
+                          style: const TextStyle(fontSize: 13),
+                          overflow: TextOverflow.ellipsis),
                     ),
                     const SizedBox(width: 9),
-                    Text(
-                      'n=${row.sampleSize}',
-                      style: AppTheme.mono(size: 10, color: AppColors.muted),
-                    ),
+                    Text('n=${row.sampleSize}',
+                        style:
+                            AppTheme.mono(size: 10, color: AppColors.muted)),
                   ],
                 ),
                 const SizedBox(height: 7),
@@ -251,141 +425,11 @@ class _RankRow extends StatelessWidget {
           const SizedBox(width: 14),
           SizedBox(
             width: 40,
-            child: Text(
-              row.average.toStringAsFixed(1),
-              textAlign: TextAlign.right,
-              style: AppTheme.mono(size: 15, color: color),
-            ),
+            child: Text(row.average.toStringAsFixed(1),
+                textAlign: TextAlign.right,
+                style: AppTheme.mono(size: 15, color: color)),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _RecentList extends StatelessWidget {
-  const _RecentList({required this.visits});
-
-  final List<Evaluation> visits;
-
-  @override
-  Widget build(BuildContext context) {
-    if (visits.isEmpty) {
-      return const Text(
-        'No submitted visits yet.',
-        style: TextStyle(fontSize: 13, color: AppColors.muted),
-      );
-    }
-
-    return Column(
-      children: [
-        for (var i = 0; i < visits.length; i++)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 11),
-            decoration: BoxDecoration(
-              border: i == visits.length - 1
-                  ? null
-                  : const Border(
-                      bottom: BorderSide(color: Color(0xFF2A2A2A))),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        visits[i].farmName,
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w500),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${visits[i].county} · ${visits[i].eoName}',
-                        style: const TextStyle(
-                            fontSize: 11.5, color: AppColors.muted),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  _shortDate(visits[i].evaluationDate),
-                  style: AppTheme.mono(size: 12, color: AppColors.text2),
-                ),
-                const SizedBox(width: 16),
-                Container(
-                  width: 42,
-                  height: 26,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.forTotalScore(visits[i].totalScore),
-                    borderRadius: BorderRadius.circular(7),
-                  ),
-                  child: Text(
-                    '${visits[i].totalScore}',
-                    style: AppTheme.mono(
-                        size: 12.5,
-                        weight: FontWeight.w600,
-                        color: const Color(0xFF0D0D0D)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  static const _months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-
-  static String _shortDate(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')} ${_months[d.month - 1]}';
-}
-
-class _ErrorPanel extends StatelessWidget {
-  const _ErrorPanel({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Panel(
-      title: 'Cannot load the dashboard',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            message,
-            style: const TextStyle(
-                fontSize: 13, color: AppColors.text2, height: 1.6),
-          ),
-          const SizedBox(height: 18),
-          OutlinedButton(onPressed: onRetry, child: const Text('Try again')),
-        ],
-      ),
-    );
-  }
-}
-
-class _EmptyPanel extends StatelessWidget {
-  const _EmptyPanel();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Panel(
-      title: 'Nothing to show yet',
-      note: 'No farms or submitted visits have reached the database.',
-      child: Text(
-        'Once field officers submit visits from the mobile app, the figures '
-        'appear here automatically.',
-        style: TextStyle(fontSize: 13, color: AppColors.text2, height: 1.6),
       ),
     );
   }

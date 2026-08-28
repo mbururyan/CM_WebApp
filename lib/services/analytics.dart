@@ -3,6 +3,23 @@ import '../models/farm.dart';
 import 'config_service.dart';
 import 'data_service.dart';
 
+/// The date windows offered by the Overview filter.
+enum DateWindow {
+  week(7, 'Last 7 days'),
+  month(30, 'Last 30 days'),
+  quarter(90, 'Last 90 days'),
+  year(365, 'Last year'),
+  all(0, 'All time');
+
+  const DateWindow(this.days, this.label);
+
+  final int days;
+  final String label;
+
+  DateTime? cutoff(DateTime now) =>
+      days == 0 ? null : now.subtract(Duration(days: days));
+}
+
 /// One row of the "where the herd is weakest" ranking.
 class SectionAverage {
   const SectionAverage({
@@ -30,31 +47,60 @@ class OverdueFarm {
   });
 
   final Farm farm;
-
-  /// Null when the farm has never been visited.
   final DateTime? lastVisit;
-
-  /// Days since the last visit, or null if never visited.
   final int? daysSince;
+}
+
+/// A labelled magnitude, for the bar charts.
+class Slice {
+  const Slice(this.label, this.value, {this.sublabel});
+
+  final String label;
+  final num value;
+
+  /// Optional second line, e.g. the county under a farm name.
+  final String? sublabel;
 }
 
 /// All dashboard figures, computed in memory from a single FleetData load.
 ///
-/// Pure computation — no Firestore, no widgets. Every number the GM sees on
-/// Monday comes out of this class.
+/// Pure computation — no Firestore, no widgets.
 class Analytics {
-  Analytics(this.data, {DateTime? now, int? overdueDays})
-      : now = now ?? DateTime.now(),
+  Analytics(
+    this.data, {
+    DateTime? now,
+    int? overdueDays,
+    this.window = DateWindow.all,
+  })  : now = now ?? DateTime.now(),
         overdueDays = overdueDays ?? ConfigService.current.overdueDays;
 
   final FleetData data;
   final DateTime now;
   final int overdueDays;
 
-  List<Evaluation> get _visits => data.evaluations;
+  /// The active date filter. Every figure below except [farmCount] and the
+  /// overdue list is computed over visits inside this window.
+  final DateWindow window;
+
+  /// Visits inside the window.
+  ///
+  /// The window is applied here, once, and everything downstream inherits
+  /// it. That is what makes "head overseen" mean *head seen in this period*
+  /// rather than head ever recorded — a farm not visited in the last 7 days
+  /// contributes nothing to a 7-day view.
+  late final List<Evaluation> _visits = () {
+    final cut = window.cutoff(now);
+    if (cut == null) return data.evaluations;
+    return data.evaluations
+        .where((v) => !v.evaluationDate.isBefore(cut))
+        .toList();
+  }();
+
+  List<Evaluation> get visits => _visits;
 
   // ---------- headline figures ----------
 
+  /// Not windowed: the register is the register regardless of date.
   int get farmCount => data.farms.length;
 
   int get visitCount => _visits.length;
@@ -64,43 +110,40 @@ class Analytics {
     return _visits.where((v) => !v.evaluationDate.isBefore(start)).length;
   }
 
-  /// Mean total score across every submitted visit, or null when there are
-  /// none — a zero here would read as "the fleet scores 0", which is a lie.
+  /// Null when there are no visits — a zero would read as "the fleet scores
+  /// zero", which is a different and false claim.
   double? get averageScore {
     if (_visits.isEmpty) return null;
-    final sum = _visits.fold<int>(0, (a, v) => a + v.totalScore);
-    return sum / _visits.length;
+    return _visits.fold<int>(0, (a, v) => a + v.totalScore) / _visits.length;
   }
 
-  /// Change in average score, last 30 days versus the 30 before that.
-  /// Null unless both windows have visits.
+  /// Change against the equally-sized period immediately before the window.
+  /// Null for "all time", and null unless both periods have visits.
   double? get averageScoreChange {
-    final recent = _mean(_between(now.subtract(const Duration(days: 30)), now));
-    final prior = _mean(_between(
-      now.subtract(const Duration(days: 60)),
-      now.subtract(const Duration(days: 30)),
-    ));
+    if (window.days == 0) return null;
+    final d = Duration(days: window.days);
+    final recent = _mean(_between(now.subtract(d), now));
+    final prior =
+        _mean(_between(now.subtract(d * 2), now.subtract(d)));
     if (recent == null || prior == null) return null;
     return recent - prior;
   }
 
   /// TRAP 1: herd counts live on visits, not farms. Summing every visit
-  /// double-counts a farm visited twice. Take the latest visit per farm,
-  /// then sum those.
+  /// double-counts a farm visited twice, so take the latest visit per farm
+  /// and sum those.
   int get totalHead =>
       latestVisitPerFarm.values.fold<int>(0, (a, v) => a + v.totalHerd);
 
-  /// Farms with at least one submitted visit.
   int get farmsCovered => latestVisitPerFarm.length;
 
   // ---------- the latest-visit index ----------
 
-  /// farm_id -> that farm's most recent submitted visit.
+  /// farm_id -> that farm's most recent visit within the window.
   ///
   /// TRAP 2: two visits to the same farm on the same day break a naive
-  /// "latest" comparison, so ties fall through to created_at. If both are
-  /// missing created_at the incumbent wins, which is at least stable.
-  Map<String, Evaluation> get latestVisitPerFarm {
+  /// "latest" comparison, so ties fall through to created_at.
+  late final Map<String, Evaluation> latestVisitPerFarm = () {
     final latest = <String, Evaluation>{};
     for (final v in _visits) {
       if (v.farmId.isEmpty) continue;
@@ -108,23 +151,58 @@ class Analytics {
       if (held == null || _isNewer(v, held)) latest[v.farmId] = v;
     }
     return latest;
-  }
+  }();
 
   static bool _isNewer(Evaluation candidate, Evaluation held) {
     final byDate = candidate.evaluationDate.compareTo(held.evaluationDate);
     if (byDate != 0) return byDate > 0;
-
-    final a = candidate.createdAt;
-    final b = held.createdAt;
+    final a = candidate.createdAt, b = held.createdAt;
     if (a == null || b == null) return false;
     return a.isAfter(b);
   }
 
-  // ---------- section ranking ----------
+  // ---------- charts ----------
 
-  /// Average score per section across all submitted visits, worst first.
-  /// The most useful number in the product: it says where the systemic
-  /// weakness is, which is something FCL can act on.
+  /// Visits per evaluator, most first.
+  List<Slice> get visitsByEvaluator {
+    final counts = <String, int>{};
+    for (final v in _visits) {
+      final name = v.eoName.isEmpty ? '—' : v.eoName;
+      counts[name] = (counts[name] ?? 0) + 1;
+    }
+    final rows = counts.entries.map((e) => Slice(e.key, e.value)).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return rows;
+  }
+
+  /// Herd size per farm, from each farm's latest visit in the window.
+  List<Slice> herdByFarm({int limit = 15}) {
+    final rows = latestVisitPerFarm.values
+        .map((v) => Slice(
+              v.farmName,
+              v.totalHerd,
+              sublabel: v.county.isEmpty ? null : v.county,
+            ))
+        .toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return rows.take(limit).toList();
+  }
+
+  int get farmsWithHerdData => latestVisitPerFarm.length;
+
+  /// Herd size per county, latest visit per farm.
+  List<Slice> get herdByCounty {
+    final byCounty = <String, int>{};
+    for (final v in latestVisitPerFarm.values) {
+      final c = v.county.isEmpty ? 'Unknown' : v.county;
+      byCounty[c] = (byCounty[c] ?? 0) + v.totalHerd;
+    }
+    final rows = byCounty.entries.map((e) => Slice(e.key, e.value)).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return rows;
+  }
+
+  /// Average score per section, worst first.
   List<SectionAverage> get sectionRanking {
     final totals = <String, int>{};
     final counts = <String, int>{};
@@ -147,21 +225,18 @@ class Analytics {
         sampleSize: n,
       ));
     }
-
     rows.sort((a, b) => a.average.compareTo(b.average));
     return rows;
   }
 
-  // ---------- distributions ----------
-
-  /// rating -> count, always containing all four keys so the bar renders
-  /// with stable segment order even when a band is empty.
+  /// Visit counts per rating band. Always all four keys, in ramp order, so
+  /// the segments keep their colours even when a band is empty.
   Map<String, int> get ratingMix {
     final mix = <String, int>{
-      'excellent': 0,
-      'good': 0,
-      'fair': 0,
       'poor': 0,
+      'fair': 0,
+      'good': 0,
+      'excellent': 0,
     };
     for (final v in _visits) {
       final band = Evaluation.bandFor(v.totalScore);
@@ -170,35 +245,8 @@ class Analytics {
     return mix;
   }
 
-  /// county -> head count, from the latest visit per farm, biggest first.
-  List<MapEntry<String, int>> get headByCounty {
-    final byCounty = <String, int>{};
-    for (final v in latestVisitPerFarm.values) {
-      final county = v.county.isEmpty ? 'Unknown' : v.county;
-      byCounty[county] = (byCounty[county] ?? 0) + v.totalHerd;
-    }
-    final rows = byCounty.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return rows;
-  }
-
-  /// Visit counts for the last [weeks] weeks, oldest first.
-  List<int> visitsPerWeek({int weeks = 8}) {
-    final startOfThisWeek = _startOfWeek(now);
-    final buckets = List<int>.filled(weeks, 0);
-
-    for (final v in _visits) {
-      final diff = startOfThisWeek.difference(_startOfWeek(v.evaluationDate));
-      final weeksAgo = (diff.inDays / 7).round();
-      if (weeksAgo < 0 || weeksAgo >= weeks) continue;
-      buckets[weeks - 1 - weeksAgo] += 1;
-    }
-    return buckets;
-  }
-
   // ---------- lists ----------
 
-  /// Newest visits first.
   List<Evaluation> recentVisits({int limit = 5}) {
     final sorted = [..._visits]..sort((a, b) {
         final byDate = b.evaluationDate.compareTo(a.evaluationDate);
@@ -210,14 +258,22 @@ class Analytics {
     return sorted.take(limit).toList();
   }
 
-  /// Farms not visited within [overdueDays], never-visited ones first,
-  /// then longest-waiting.
+  /// Farms not visited within [overdueDays].
+  ///
+  /// Deliberately computed against ALL visits, not the window: whether a
+  /// farm is overdue is a fact about the calendar, not about the filter.
+  /// Filtering it would make every farm look overdue on a 7-day view.
   List<OverdueFarm> overdueFarms({int? limit}) {
-    final latest = latestVisitPerFarm;
-    final rows = <OverdueFarm>[];
+    final latestEver = <String, Evaluation>{};
+    for (final v in data.evaluations) {
+      if (v.farmId.isEmpty) continue;
+      final held = latestEver[v.farmId];
+      if (held == null || _isNewer(v, held)) latestEver[v.farmId] = v;
+    }
 
+    final rows = <OverdueFarm>[];
     for (final farm in data.farms) {
-      final visit = latest[farm.id];
+      final visit = latestEver[farm.id];
       if (visit == null) {
         rows.add(OverdueFarm(farm: farm, lastVisit: null, daysSince: null));
         continue;
@@ -225,10 +281,7 @@ class Analytics {
       final days = now.difference(visit.evaluationDate).inDays;
       if (days >= overdueDays) {
         rows.add(OverdueFarm(
-          farm: farm,
-          lastVisit: visit.evaluationDate,
-          daysSince: days,
-        ));
+            farm: farm, lastVisit: visit.evaluationDate, daysSince: days));
       }
     }
 
@@ -244,7 +297,7 @@ class Analytics {
 
   // ---------- helpers ----------
 
-  List<Evaluation> _between(DateTime from, DateTime to) => _visits
+  List<Evaluation> _between(DateTime from, DateTime to) => data.evaluations
       .where((v) =>
           !v.evaluationDate.isBefore(from) && v.evaluationDate.isBefore(to))
       .toList();
@@ -254,7 +307,6 @@ class Analytics {
     return list.fold<int>(0, (a, v) => a + v.totalScore) / list.length;
   }
 
-  /// Monday 00:00 of the week containing [d].
   static DateTime _startOfWeek(DateTime d) {
     final midnight = DateTime(d.year, d.month, d.day);
     return midnight.subtract(Duration(days: midnight.weekday - 1));

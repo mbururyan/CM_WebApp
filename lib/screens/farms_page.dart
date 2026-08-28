@@ -1,18 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../models/evaluation.dart';
-import '../models/farm.dart';
 import '../services/analytics.dart';
 import '../services/data_service.dart';
 import '../services/export_service.dart';
 import '../services/export_tables.dart';
+import '../services/farm_stats.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
 import '../widgets/panel.dart';
 import 'farm_detail_page.dart';
 
-/// The farm register, filterable, with a detail view per farm.
+/// The farm register as a grid of cards. Each card carries enough to decide
+/// whether to open it: herd, average score, visit count, and how long since
+/// anyone was there.
 class FarmsPage extends StatefulWidget {
   const FarmsPage({super.key});
 
@@ -28,18 +30,23 @@ class _FarmsPageState extends State<FarmsPage> {
   String _system = _all;
   String _coverage = _allFarms;
 
-  Farm? _selected;
+  String? _selectedId;
 
   static const _all = 'All';
   static const _allFarms = 'All farms';
   static const _never = 'Never visited';
-  static const _overdue = 'Overdue 90+ days';
+  static const _overdue = 'Overdue';
 
   @override
   void initState() {
     super.initState();
     _future = DataService.loadAll();
   }
+
+  void _reload() => setState(() {
+        _future = DataService.loadAll();
+        _selectedId = null;
+      });
 
   @override
   Widget build(BuildContext context) {
@@ -63,37 +70,40 @@ class _FarmsPageState extends State<FarmsPage> {
         if (snapshot.hasError) {
           return Panel(
             title: 'Could not load farms',
-            child: Text('${snapshot.error}',
-                style: const TextStyle(
-                    fontSize: 13, color: AppColors.text2, height: 1.6)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${snapshot.error}',
+                    style: const TextStyle(
+                        fontSize: 13, color: AppColors.text2, height: 1.6)),
+                const SizedBox(height: 18),
+                OutlinedButton(
+                    onPressed: _reload, child: const Text('Try again')),
+              ],
+            ),
           );
         }
 
         final data = snapshot.data!;
-        final a = Analytics(data);
-        final latest = a.latestVisitPerFarm;
+        final all = FarmStats.buildAll(data.farms, data.evaluations);
 
-        // farm_id -> its visits, built once instead of scanning per row.
-        final byFarm = <String, List<Evaluation>>{};
-        for (final v in data.evaluations) {
-          byFarm.putIfAbsent(v.farmId, () => []).add(v);
+        // Held by id, not by object, so the detail page survives a reload.
+        if (_selectedId != null) {
+          final match = all.where((s) => s.farm.id == _selectedId).toList();
+          if (match.isNotEmpty) {
+            return FarmDetailPage(
+              stats: match.first,
+              onBack: () => setState(() => _selectedId = null),
+              onChanged: _reload,
+            );
+          }
+          // The farm was deleted underneath us.
+          WidgetsBinding.instance.addPostFrameCallback(
+              (_) => setState(() => _selectedId = null));
         }
 
-        if (_selected != null) {
-          return FarmDetailPage(
-            farm: _selected!,
-            visits: byFarm[_selected!.id] ?? const [],
-            onBack: () => setState(() => _selected = null),
-            // After a delete: drop back to the table and re-read, so the
-            // counts and the never-visited badges are honest again.
-            onChanged: () => setState(() {
-              _selected = null;
-              _future = DataService.loadAll();
-            }),
-          );
-        }
-
-        final rows = _apply(data.farms, latest);
+        final rows = _apply(all);
+        final overdueDays = ConfigDays.of(data);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -101,24 +111,33 @@ class _FarmsPageState extends State<FarmsPage> {
             _Filters(
               counties: _options(data.farms.map((f) => f.county)),
               systems: _options(data.farms.map((f) => f.systemLabel)),
-              search: _search,
               county: _county,
               system: _system,
               coverage: _coverage,
-              onChanged: (s, c, sy, cov) => setState(() {
-                _search = s;
-                _county = c;
-                _system = sy;
-                _coverage = cov;
-              }),
+              onSearch: (v) => setState(() => _search = v),
+              onCounty: (v) => setState(() => _county = v),
+              onSystem: (v) => setState(() => _system = v),
+              onCoverage: (v) => setState(() => _coverage = v),
               onExport: rows.isEmpty
                   ? null
-                  : () => ExportService.downloadCsv(
-                        table: ExportTables.farms(rows, latest),
+                  : () {
+                      final latest = Analytics(data).latestVisitPerFarm;
+                      ExportService.downloadCsv(
+                        table: ExportTables.farms(
+                            rows.map((s) => s.farm).toList(), latest),
                         filename: ExportService.stamped('cm-farms'),
-                      ),
+                      );
+                    },
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 2, bottom: 12),
+              child: Text(
+                '${rows.length} of ${all.length} farms · '
+                '${all.where((s) => !s.everVisited).length} never visited',
+                style: AppTheme.mono(size: 12, color: AppColors.muted),
+              ),
+            ),
             if (rows.isEmpty)
               Panel(
                 title: 'No farms match these filters',
@@ -126,13 +145,13 @@ class _FarmsPageState extends State<FarmsPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      data.farms.isEmpty
+                      all.isEmpty
                           ? 'No farms have been registered yet.'
                           : 'Try clearing a filter.',
                       style: const TextStyle(
                           fontSize: 13, color: AppColors.text2, height: 1.6),
                     ),
-                    if (data.farms.isNotEmpty) ...[
+                    if (all.isNotEmpty) ...[
                       const SizedBox(height: 16),
                       OutlinedButton(
                         onPressed: () => setState(() {
@@ -148,13 +167,10 @@ class _FarmsPageState extends State<FarmsPage> {
                 ),
               )
             else
-              _FarmTable(
-                farms: rows,
-                latest: latest,
-                byFarm: byFarm,
-                neverVisited:
-                    data.farms.where((f) => !latest.containsKey(f.id)).length,
-                onOpen: (f) => setState(() => _selected = f),
+              _CardGrid(
+                rows: rows,
+                overdueDays: overdueDays,
+                onOpen: (s) => setState(() => _selectedId = s.farm.id),
               ),
           ],
         );
@@ -162,21 +178,19 @@ class _FarmsPageState extends State<FarmsPage> {
     );
   }
 
-  List<Farm> _apply(List<Farm> source, Map<String, Evaluation> latest) {
+  List<FarmStats> _apply(List<FarmStats> source) {
     final q = _search.trim().toLowerCase();
     final now = DateTime.now();
 
-    final rows = source.where((f) {
+    final rows = source.where((s) {
+      final f = s.farm;
       if (_county != _all && f.county != _county) return false;
       if (_system != _all && f.systemLabel != _system) return false;
-
-      final last = latest[f.id];
-      if (_coverage == _never && last != null) return false;
+      if (_coverage == _never && s.everVisited) return false;
       if (_coverage == _overdue) {
-        if (last == null) return false; // never-visited has its own filter
-        if (now.difference(last.evaluationDate).inDays < 90) return false;
+        if (!s.everVisited) return false;
+        if (s.daysSinceLastVisit(now) < 90) return false;
       }
-
       if (q.isNotEmpty) {
         final hay =
             '${f.name} ${f.ownerManager} ${f.locationArea} ${f.county} ${f.subCounty}'
@@ -186,12 +200,12 @@ class _FarmsPageState extends State<FarmsPage> {
       return true;
     }).toList();
 
-    // Never-visited farms first — the actionable ones — then by name.
+    // Never-visited first — those are the actionable gaps — then by name.
     rows.sort((x, y) {
-      final xv = latest.containsKey(x.id) ? 1 : 0;
-      final yv = latest.containsKey(y.id) ? 1 : 0;
+      final xv = x.everVisited ? 1 : 0;
+      final yv = y.everVisited ? 1 : 0;
       if (xv != yv) return xv - yv;
-      return x.name.toLowerCase().compareTo(y.name.toLowerCase());
+      return x.farm.name.toLowerCase().compareTo(y.farm.name.toLowerCase());
     });
 
     return rows;
@@ -204,25 +218,327 @@ class _FarmsPageState extends State<FarmsPage> {
   }
 }
 
+/// Small helper so the card grid can label the overdue badge with whatever
+/// threshold Settings currently holds.
+class ConfigDays {
+  ConfigDays._();
+  static int of(FleetData data) => Analytics(data).overdueDays;
+}
+
+class _CardGrid extends StatelessWidget {
+  const _CardGrid({
+    required this.rows,
+    required this.overdueDays,
+    required this.onOpen,
+  });
+
+  final List<FarmStats> rows;
+  final int overdueDays;
+  final ValueChanged<FarmStats> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    // Cards want a minimum readable width; the column count follows from
+    // that rather than from a breakpoint table.
+    final columns = width >= 1180 ? 3 : (width >= 760 ? 2 : 1);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const gap = 14.0;
+        final cardWidth =
+            (constraints.maxWidth - gap * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final s in rows)
+              SizedBox(
+                width: cardWidth,
+                child: _FarmCard(
+                  stats: s,
+                  overdueDays: overdueDays,
+                  onTap: () => onOpen(s),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _FarmCard extends StatefulWidget {
+  const _FarmCard({
+    required this.stats,
+    required this.overdueDays,
+    required this.onTap,
+  });
+
+  final FarmStats stats;
+  final int overdueDays;
+  final VoidCallback onTap;
+
+  @override
+  State<_FarmCard> createState() => _FarmCardState();
+}
+
+class _FarmCardState extends State<_FarmCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.stats;
+    final f = s.farm;
+    final now = DateTime.now();
+    final days = s.daysSinceLastVisit(now);
+    final overdue = s.everVisited && days >= widget.overdueDays;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: _hover ? const Color(0xFF232323) : AppColors.surface,
+            border: Border.all(
+                color: _hover ? const Color(0xFF4A4A4A) : AppColors.border),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ---- name + latest score ----
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          f.name,
+                          style: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.2),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          [f.locationArea, f.county]
+                              .where((x) => x.isNotEmpty)
+                              .join(' · '),
+                          style: const TextStyle(
+                              fontSize: 11.5, color: AppColors.muted),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  if (s.latestScore != null)
+                    Container(
+                      width: 44,
+                      height: 28,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: AppColors.forTotalScore(s.latestScore!),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Text('${s.latestScore}',
+                          style: AppTheme.mono(
+                              size: 13,
+                              weight: FontWeight.w600,
+                              color: const Color(0xFF0D0D0D))),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+
+              if (!s.everVisited)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: AppColors.fill,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text(
+                    'Never visited · registered by ${f.createdByName}',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.muted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                )
+              else ...[
+                Row(
+                  children: [
+                    _Metric(
+                        label: 'Herd', value: Fmt.thousands(s.herdSize ?? 0)),
+                    _Metric(
+                      label: 'Avg score',
+                      value: s.averageScore!.toStringAsFixed(1),
+                      color: AppColors.forTotalScore(
+                          s.averageScore!.round()),
+                    ),
+                    _Metric(label: 'Visits', value: '${s.visitCount}'),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                _WeakStrong(stats: s),
+              ],
+
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Icon(
+                    overdue ? Icons.schedule : Icons.check_circle_outline,
+                    size: 13,
+                    color: overdue ? AppColors.amber : AppColors.muted,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      s.everVisited
+                          ? 'Last visit ${Fmt.relative(s.latest!.evaluationDate, now: now)}'
+                          : 'Registered ${Fmt.relative(f.createdAt, now: now)}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: overdue ? AppColors.amber : AppColors.muted,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (s.trend != null)
+                    Text(
+                      '${s.trend! >= 0 ? '+' : ''}${s.trend}',
+                      style: AppTheme.mono(
+                        size: 11.5,
+                        color: s.trend! >= 0
+                            ? AppColors.greenLight
+                            : AppColors.orange,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Metric extends StatelessWidget {
+  const _Metric({required this.label, required this.value, this.color});
+
+  final String label;
+  final String value;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(value,
+              style: AppTheme.mono(size: 16, color: color ?? AppColors.text)),
+          const SizedBox(height: 2),
+          Text(label.toUpperCase(), style: AppTheme.eyebrow),
+        ],
+      ),
+    );
+  }
+}
+
+/// Weakest and strongest section, side by side. Two words each — the card
+/// is a decision aid, not a report.
+class _WeakStrong extends StatelessWidget {
+  const _WeakStrong({required this.stats});
+
+  final FarmStats stats;
+
+  @override
+  Widget build(BuildContext context) {
+    final weak = stats.weakest;
+    final strong = stats.strongest;
+    if (weak == null) return const SizedBox.shrink();
+
+    Widget line(IconData icon, Color color, MapEntry<String, double> e) => Row(
+          children: [
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                Sections.label(e.key),
+                style: const TextStyle(
+                    fontSize: 11.5, color: AppColors.text2),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(e.value.toStringAsFixed(1),
+                style: AppTheme.mono(size: 11.5, color: color)),
+          ],
+        );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.fill,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Column(
+        children: [
+          line(Icons.arrow_downward, AppColors.orange, weak),
+          if (strong != null && strong.key != weak.key) ...[
+            const SizedBox(height: 7),
+            line(Icons.arrow_upward, AppColors.greenLight, strong),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _Filters extends StatelessWidget {
   const _Filters({
     required this.counties,
     required this.systems,
-    required this.search,
     required this.county,
     required this.system,
     required this.coverage,
-    required this.onChanged,
+    required this.onSearch,
+    required this.onCounty,
+    required this.onSystem,
+    required this.onCoverage,
     required this.onExport,
   });
 
   final List<String> counties;
   final List<String> systems;
-  final String search;
   final String county;
   final String system;
   final String coverage;
-  final void Function(String, String, String, String) onChanged;
+  final ValueChanged<String> onSearch;
+  final ValueChanged<String> onCounty;
+  final ValueChanged<String> onSystem;
+  final ValueChanged<String> onCoverage;
   final VoidCallback? onExport;
 
   @override
@@ -243,23 +559,15 @@ class _Filters extends StatelessWidget {
                   EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
             style: const TextStyle(fontSize: 13),
-            onChanged: (v) => onChanged(v, county, system, coverage),
+            onChanged: onSearch,
           ),
         ),
-        _Select(
-          value: county,
-          items: counties,
-          onChanged: (v) => onChanged(search, v, system, coverage),
-        ),
-        _Select(
-          value: system,
-          items: systems,
-          onChanged: (v) => onChanged(search, county, v, coverage),
-        ),
+        _Select(value: county, items: counties, onChanged: onCounty),
+        _Select(value: system, items: systems, onChanged: onSystem),
         _Select(
           value: coverage,
-          items: const ['All farms', 'Never visited', 'Overdue 90+ days'],
-          onChanged: (v) => onChanged(search, county, system, v),
+          items: const ['All farms', 'Never visited', 'Overdue'],
+          onChanged: onCoverage,
         ),
         if (onExport != null)
           OutlinedButton.icon(
@@ -310,281 +618,6 @@ class _Select extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           icon: const Icon(Icons.expand_more, size: 18, color: AppColors.muted),
         ),
-      ),
-    );
-  }
-}
-
-class _FarmTable extends StatelessWidget {
-  const _FarmTable({
-    required this.farms,
-    required this.latest,
-    required this.byFarm,
-    required this.neverVisited,
-    required this.onOpen,
-  });
-
-  final List<Farm> farms;
-  final Map<String, Evaluation> latest;
-  final Map<String, List<Evaluation>> byFarm;
-  final int neverVisited;
-  final ValueChanged<Farm> onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minWidth: MediaQuery.sizeOf(context).width > 900
-                    ? MediaQuery.sizeOf(context).width - 300
-                    : 800,
-              ),
-              child: Column(
-                children: [
-                  const _HeaderRow(),
-                  for (final f in farms)
-                    _Row(
-                      farm: f,
-                      latest: latest[f.id],
-                      history: byFarm[f.id] ?? const [],
-                      onTap: () => onOpen(f),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: AppColors.border)),
-            ),
-            child: Text(
-              '${farms.length} ${farms.length == 1 ? "farm" : "farms"}'
-              '${neverVisited > 0 ? " · $neverVisited never visited" : ""}',
-              style: const TextStyle(fontSize: 12, color: AppColors.muted),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-const _wName = 3;
-const _wCounty = 2;
-const _wSystem = 2;
-const _wBy = 2;
-
-class _HeaderRow extends StatelessWidget {
-  const _HeaderRow();
-
-  @override
-  Widget build(BuildContext context) {
-    Widget h(String t, int flex) => Expanded(
-          flex: flex,
-          child: Text(t.toUpperCase(), style: AppTheme.eyebrow),
-        );
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        children: [
-          h('Farm', _wName),
-          h('County', _wCounty),
-          h('System', _wSystem),
-          h('Registered by', _wBy),
-          SizedBox(width: 52, child: Text('VISITS', style: AppTheme.eyebrow)),
-          SizedBox(width: 74, child: Text('TREND', style: AppTheme.eyebrow)),
-          SizedBox(width: 108, child: Text('LATEST', style: AppTheme.eyebrow)),
-          const SizedBox(width: 28),
-        ],
-      ),
-    );
-  }
-}
-
-class _Row extends StatefulWidget {
-  const _Row({
-    required this.farm,
-    required this.latest,
-    required this.history,
-    required this.onTap,
-  });
-
-  final Farm farm;
-  final Evaluation? latest;
-  final List<Evaluation> history;
-  final VoidCallback onTap;
-
-  @override
-  State<_Row> createState() => _RowState();
-}
-
-class _RowState extends State<_Row> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final f = widget.farm;
-    final last = widget.latest;
-
-    Widget cell(String t, int flex, {FontWeight? weight}) => Expanded(
-          flex: flex,
-          child: Text(
-            t.isEmpty ? '—' : t,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 13, fontWeight: weight),
-          ),
-        );
-
-    final sorted = [...widget.history]
-      ..sort((a, b) => a.evaluationDate.compareTo(b.evaluationDate));
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-          color: _hover ? const Color(0xFF232323) : Colors.transparent,
-          child: Row(
-            children: [
-              Expanded(
-                flex: _wName,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(f.name,
-                        style: const TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w500),
-                        overflow: TextOverflow.ellipsis),
-                    if (f.locationArea.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(f.locationArea,
-                          style: const TextStyle(
-                              fontSize: 11.5, color: AppColors.muted),
-                          overflow: TextOverflow.ellipsis),
-                    ],
-                  ],
-                ),
-              ),
-              cell(f.county, _wCounty),
-              cell(f.systemLabel, _wSystem),
-              cell(f.createdByName, _wBy),
-              SizedBox(
-                width: 52,
-                child: Text('${widget.history.length}',
-                    style: AppTheme.mono(
-                        size: 12.5, color: AppColors.text2)),
-              ),
-              SizedBox(
-                width: 74,
-                child: _Sparkline(visits: sorted),
-              ),
-              SizedBox(
-                width: 108,
-                child: last == null
-                    ? Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppColors.fill,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text('NEVER VISITED',
-                            style: AppTheme.mono(
-                                size: 9.5, color: AppColors.muted)),
-                      )
-                    : Row(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 24,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color:
-                                  AppColors.forTotalScore(last.totalScore),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text('${last.totalScore}',
-                                style: AppTheme.mono(
-                                    size: 12,
-                                    weight: FontWeight.w600,
-                                    color: const Color(0xFF0D0D0D))),
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              Fmt.shortDate(last.evaluationDate),
-                              style: AppTheme.mono(
-                                  size: 11, color: AppColors.muted),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-              SizedBox(
-                width: 28,
-                child: Icon(Icons.chevron_right,
-                    size: 17,
-                    color: _hover ? AppColors.text2 : AppColors.muted),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Total score per visit, oldest to newest. Shows whether a farm is moving
-/// without needing to open it.
-class _Sparkline extends StatelessWidget {
-  const _Sparkline({required this.visits});
-
-  final List<Evaluation> visits;
-
-  @override
-  Widget build(BuildContext context) {
-    if (visits.isEmpty) {
-      return Text('—',
-          style: AppTheme.mono(size: 12, color: AppColors.muted));
-    }
-
-    return SizedBox(
-      height: 22,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          for (final v in visits.take(8))
-            Padding(
-              padding: const EdgeInsets.only(right: 3),
-              child: Container(
-                width: 5,
-                height: (v.totalScore / 35 * 22).clamp(2, 22),
-                decoration: BoxDecoration(
-                  color: AppColors.forTotalScore(v.totalScore),
-                  borderRadius: BorderRadius.circular(1.5),
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }
