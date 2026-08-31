@@ -7,8 +7,11 @@ import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
 import '../widgets/charts.dart';
+import '../widgets/farms_dialog.dart';
 import '../widgets/herd_dialog.dart';
+import '../widgets/overdue_dialog.dart';
 import '../widgets/panel.dart';
+import '../widgets/score_dialog.dart';
 
 /// The dashboard's front page. Loads the fleet once, then re-slices it in
 /// memory as the date filter changes — no refetch, so the filter is instant.
@@ -116,6 +119,10 @@ class _Body extends StatelessWidget {
     final avg = a.averageScore;
     final change = a.averageScoreChange;
     final overdue = a.overdueFarms();
+    // Computed with the same function the dialog uses, so the tile's number
+    // and the dialog's row count can never disagree.
+    final registered =
+        FarmsDialog.registeredSince(a.data.farms, a.window.cutoff(a.now));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -132,8 +139,9 @@ class _Body extends StatelessWidget {
           crossAxisSpacing: 14,
           childAspectRatio: 1.72,
           children: [
-            // The only clickable tile on the page — gold outline and a
-            // chevron so it reads as a door rather than a number.
+            // Outline plus chevron marks a tile that opens something.
+            // Gold for the herd breakdown, green for the two neutral
+            // drill-downs, red for the one that is a problem list.
             KpiTile(
               label: 'Total herd size',
               value: Fmt.thousands(a.totalHead),
@@ -158,17 +166,49 @@ class _Body extends StatelessWidget {
               sublineColor: change == null
                   ? null
                   : (change >= 0 ? AppColors.greenLight : AppColors.orange),
+              accent: AppColors.greenLight,
+              // No visits means nothing to rank, and a chevron promising a
+              // list that turns out empty is worse than no chevron.
+              onTap: a.visits.isEmpty
+                  ? null
+                  : () => ScoreDialog.show(
+                        context,
+                        visits: a.visits,
+                        fleetAverage: avg,
+                        periodLabel: window.label,
+                      ),
             ),
             KpiTile(
               label: 'Farms registered',
-              value: '${a.farmCount}',
-              subline: '${a.farmsCovered} visited in this period',
+              value: '${registered.length}',
+              // The headline is now new registrations inside the window, so
+              // the register total moves to the subline — without it the
+              // card reads as "we only have three farms".
+              subline: window == DateWindow.all
+                  ? '${a.farmsCovered} visited in this period'
+                  : 'new \u00B7 ${a.farmCount} on the register',
+              accent: AppColors.greenLight,
+              onTap: () => FarmsDialog.show(
+                context,
+                allFarms: a.data.farms,
+                cutoff: a.window.cutoff(a.now),
+                periodLabel: window.label,
+              ),
             ),
             KpiTile(
               label: 'Need a visit',
               value: '${overdue.length}',
               subline: 'over ${a.overdueDays} days, or never',
-              sublineColor: overdue.isEmpty ? null : AppColors.amber,
+              // Red only when there is something to be red about. An empty
+              // list outlined in red reads as an alarm that nobody can
+              // silence.
+              accent: overdue.isEmpty ? null : AppColors.scoreRamp[0],
+              onTap: () => OverdueDialog.show(
+                context,
+                overdue: overdue,
+                allVisits: a.data.evaluations,
+                overdueDays: a.overdueDays,
+              ),
             ),
           ],
         ),

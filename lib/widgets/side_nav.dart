@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../models/app_user.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
-import 'brand_mark.dart';
 
 /// One destination in the sidebar.
 class NavItem {
@@ -64,6 +63,16 @@ const navItems = <NavItem>[
     section: 'Admin',
     adminOnly: true,
   ),
+  // Appended rather than slotted next to Exports on purpose: index IS the
+  // page index, so inserting above Settings would renumber it and point
+  // that row at the wrong page. Its own section label keeps it from
+  // reading as an admin tool.
+  NavItem(
+    label: 'Gallery',
+    icon: Icons.photo_library_outlined,
+    subtitle: 'Cattle photographs from farm visits',
+    section: 'Coming soon',
+  ),
 ];
 
 class SideNav extends StatelessWidget {
@@ -100,21 +109,35 @@ class SideNav extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
             child: Row(
               children: [
-                const BrandMark(size: 34, radius: 9),
+                // Height only, no width: the badge is about 1.67:1, so a
+                // square box would shrink it to fit the narrower side and
+                // leave it half the height of the wordmark.
+                Image.asset(
+                  'assets/icons/cm_logo.png',
+                  height: 34,
+                  fit: BoxFit.contain,
+                ),
                 const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Ranch Evaluator',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        height: 1.15,
+                // Expanded because the badge is wider than the tractor was
+                // and the rail is fixed — without it a long wordmark
+                // overflows the row instead of ellipsising.
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Ranch Evaluator',
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.15,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    Text("Choice Meats", style: AppTheme.eyebrow),
-                  ],
+                      Text("Choice Meats", style: AppTheme.eyebrow),
+                    ],
+                  ),
                 ),
               ],
             ),

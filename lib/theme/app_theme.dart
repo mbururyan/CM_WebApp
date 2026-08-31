@@ -97,6 +97,25 @@ class AppTheme {
           ),
         ),
       ),
+      // The call site can tint the background for an error without also
+      // having to remember the foreground. Material 3 defaults SnackBar
+      // text to onInverseSurface — a DARK colour, meant for the light
+      // inverseSurface — so a dark background alone leaves black text on
+      // black and the message never appears.
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.surface,
+        contentTextStyle: GoogleFonts.ibmPlexSans(
+          fontSize: 13,
+          color: AppColors.text,
+        ),
+        actionTextColor: AppColors.greenLight,
+        elevation: 6,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: AppColors.border),
+        ),
+      ),
       drawerTheme: const DrawerThemeData(
         backgroundColor: AppColors.surface,
         surfaceTintColor: Colors.transparent,

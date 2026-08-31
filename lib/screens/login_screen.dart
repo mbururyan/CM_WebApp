@@ -239,11 +239,10 @@ class _Brand extends StatelessWidget {
       children: [
         //BrandMark(size: isWide ? 80 : 56, radius: isWide ? 22 : 16),
         Image.asset(
-          'assets/icons/bull_head_detailed.png',
-          width: isWide ? 80 : 56,
-          height: isWide ? 80 : 56,
-          fit: BoxFit.contain,
-        ),
+  'assets/icons/cm_lockup_fainter.png',
+  height: isWide ? 68 : 46,
+  fit: BoxFit.contain,
+),
         SizedBox(height: isWide ? 26 : 18),
         Text("Choice Meats - Beef Procurement", style: AppTheme.eyebrow),
         const SizedBox(height: 10),

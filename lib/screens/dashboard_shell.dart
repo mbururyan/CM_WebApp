@@ -8,6 +8,7 @@ import '../widgets/side_nav.dart';
 import 'evaluators_page.dart';
 import 'exports_page.dart';
 import 'farms_page.dart';
+import 'gallery_page.dart';
 import 'overview_page.dart';
 import 'settings_page.dart';
 import 'visits_page.dart';
@@ -107,8 +108,16 @@ class _DashboardShellState extends State<DashboardShell> {
         return const EvaluatorsPage();
       case 4:
         return const ExportsPage();
-      default:
+      case 5:
         return const SettingsPage();
+      case 6:
+        return const GalleryPage();
+      // Settings used to be the fallback, which meant any index the switch
+      // did not know about rendered the admin-only page — including for
+      // evaluators, who cannot even see it in the nav. Overview is the safe
+      // landing place for an index that should not exist.
+      default:
+        return const OverviewPage();
     }
   }
 }

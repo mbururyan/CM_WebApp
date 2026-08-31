@@ -73,6 +73,15 @@ flutter:
     - assets/icons/app_icon.png
     - assets/icons/app_icon_foreground.png
     - assets/icons/bull_splash.png
+    - assets/icons/cm_lockup_fainter.png
+    - assets/icons/cm_logo.png
+    - assets/icons/cm_lockup_light.png
+
+    # Read by dart_pdf through rootBundle.load(), so these belong here
+    # under assets — NOT under the flutter: fonts: section below, which
+    # only registers a family with Flutter's own text engine.
+    - assets/fonts/IBMPlexSans-Regular.ttf
+    - assets/fonts/IBMPlexSans-SemiBold.ttf
 
 
   # An image asset can refer to one or more resolution-specific "variants", see
