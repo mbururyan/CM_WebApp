@@ -28,8 +28,8 @@ This includes data/information on :
 ![alt text](<Screenshot 2026-09-07 131405.png>)
 
 3. Gallery
-- If the EO captures photos of the famr, they can be viewed on the webapp
-![alt text](image.png)
+- If the EO captures photos of the farm, they can be viewed on the webapp
+![alt text](<Screenshot 2026-09-07 131637.png>)
 
 4. Admin Priviledges
 - An admin can make other officers admins, can reset passwords and can edit farm visists
