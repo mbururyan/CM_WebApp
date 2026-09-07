@@ -7,6 +7,7 @@ import '../services/officer_stats.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
+import '../widgets/filter_bar.dart';
 import '../widgets/panel.dart';
 import 'evaluator_detail_page.dart';
 
@@ -22,6 +23,7 @@ class EvaluatorsPage extends StatefulWidget {
 class _EvaluatorsPageState extends State<EvaluatorsPage> {
   late Future<FleetData> _future;
   String? _selectedUid;
+  String _search = '';
 
   @override
   void initState() {
@@ -85,24 +87,60 @@ class _EvaluatorsPageState extends State<EvaluatorsPage> {
               (_) => setState(() => _selectedUid = null));
         }
 
+        // The headline and the fleet average are computed from EVERY
+        // account on purpose. They are calibration figures, and a
+        // calibration figure that moves when you type in a search box is
+        // not a calibration figure. Only the grid narrows.
+        final query = _search.trim().toLowerCase();
+        final visible = query.isEmpty
+            ? stats
+            : stats
+                .where((s) =>
+                    s.user.displayName.toLowerCase().contains(query) ||
+                    s.user.roleLabel.toLowerCase().contains(query))
+                .toList();
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _Headline(stats: stats, averages: averages, now: now),
             const SizedBox(height: 16),
-            _Grid(
-              stats: stats,
-              now: now,
-              fleetAverage: fleetAverage,
-              onOpen: (s) => setState(() => _selectedUid = s.user.uid),
+            FilterBar(
+              children: [
+                FilterSearch(
+                  hint: 'Search by name or role',
+                  value: _search,
+                  onChanged: (v) => setState(() => _search = v),
+                ),
+              ],
             ),
+            const SizedBox(height: 14),
+            if (visible.isEmpty)
+              Panel(
+                title: 'No matching accounts',
+                child: Text(
+                  'Nothing on the roster matches \u201C$_search\u201D.',
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.text2, height: 1.6),
+                ),
+              )
+            else
+              _Grid(
+                stats: visible,
+                now: now,
+                fleetAverage: fleetAverage,
+                onOpen: (s) => setState(() => _selectedUid = s.user.uid),
+              ),
             const SizedBox(height: 14),
             Row(
               children: [
                 Text(
-                  '${stats.length} accounts · '
-                  '${stats.where((s) => !s.user.isAdmin).length} evaluators, '
-                  '${stats.where((s) => s.user.isAdmin).length} admin',
+                  query.isEmpty
+                      ? '${stats.length} accounts \u00B7 '
+                          '${stats.where((s) => !s.user.isAdmin).length} '
+                          'evaluators, '
+                          '${stats.where((s) => s.user.isAdmin).length} admin'
+                      : '${visible.length} of ${stats.length} accounts match',
                   style: AppTheme.mono(size: 12, color: AppColors.muted),
                 ),
                 const Spacer(),

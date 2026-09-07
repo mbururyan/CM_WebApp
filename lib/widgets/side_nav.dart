@@ -57,21 +57,19 @@ const navItems = <NavItem>[
     subtitle: 'Excel and CSV pulls — open to everyone',
   ),
   NavItem(
+    label: 'Gallery',
+    icon: Icons.photo_library_outlined,
+    subtitle: 'Cattle photographs from farm visits',
+  ),
+  // Last, and admin-only. Index into this list IS the page index, so
+  // anything inserted above here renumbers Settings — moving Gallery up
+  // shifted it from 5 to 6, and dashboard_shell was changed to match.
+  NavItem(
     label: 'Settings',
     icon: Icons.tune_outlined,
     subtitle: 'Scoring and thresholds',
     section: 'Admin',
     adminOnly: true,
-  ),
-  // Appended rather than slotted next to Exports on purpose: index IS the
-  // page index, so inserting above Settings would renumber it and point
-  // that row at the wrong page. Its own section label keeps it from
-  // reading as an admin tool.
-  NavItem(
-    label: 'Gallery',
-    icon: Icons.photo_library_outlined,
-    subtitle: 'Cattle photographs from farm visits',
-    section: 'Coming soon',
   ),
 ];
 

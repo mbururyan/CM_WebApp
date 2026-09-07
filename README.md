@@ -1,17 +1,39 @@
-# cm_web
+# Ranch Evaluator Web App
 
-A new Flutter project.
+A website/dashboard built using flutter as well, that displays data captured in the ranch eval mobile app.
 
-## Getting Started
+Link : (yet to deploy)
 
-This project is a starting point for a Flutter application.
+## What it Does
 
-A few resources to get you started if this is your first Flutter project:
+1. Real Time Analytics
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Immediately data is captured on the mobile app and uploaded on firebase, it immediately reflects on the webapp.
+This includes data/information on : 
+- farms visited
+![alt text](<Screenshot 2026-09-07 131930.png>)
+![alt text](<Screenshot 2026-09-07 131945.png>)
+- EOs who made the farm visits
+![alt text](<Screenshot 2026-09-07 132041.png>)
+![alt text](<Screenshot 2026-09-07 132100.png>)
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Farms Details
+![alt text](<Screenshot 2026-09-07 132016.png>)
+
+![alt text](<Screenshot 2026-09-07 132031.png>)
+
+2. Excel Exports
+- For the data analysts concerned with the data, the website has a export to excel functionality where they can pull any kind of data they want
+
+![alt text](<Screenshot 2026-09-07 131405.png>)
+
+3. Gallery
+- If the EO captures photos of the famr, they can be viewed on the webapp
+![alt text](image.png)
+
+4. Admin Priviledges
+- An admin can make other officers admins, can reset passwords and can edit farm visists
+![alt text](<Screenshot 2026-09-07 131842.png>)
+
+5. PDF Generation
+- The website also can generate a pf report of the farm visist, which can be shared with the respective farms

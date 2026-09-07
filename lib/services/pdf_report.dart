@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../constants/evaluation_template.dart';
 import '../models/evaluation.dart';
 import '../utils/formatters.dart';
 import 'export_service.dart';
@@ -43,10 +44,36 @@ class PdfReport {
   static const _tint = PdfColor.fromInt(0xFFF4F4F2);
   static const _green = PdfColor.fromInt(0xFF2E7D32);
 
-  static PdfColor _forSection(int score) => _ramp[(score.clamp(1, 5)) - 1];
+  /// Nothing in place — off the ramp on purpose, matching the app.
+  static const _zero = PdfColor.fromInt(0xFF8E3B32);
 
-  static PdfColor _forTotal(int total) =>
-      _forSection((total / 7).round().clamp(1, 5));
+  /// 0-5. Zero is its own colour: under v2 scoring a section can genuinely
+  /// score nothing, and painting that as poor-red would read as a 1 and
+  /// bury the worst finding on the page.
+  static PdfColor _forSection(int score) =>
+      score <= 0 ? _zero : _ramp[(score.clamp(1, 5)) - 1];
+
+  /// Colour for the rating panel, taken from the BAND rather than from
+  /// arithmetic on the total.
+  ///
+  /// The old version computed (total / 7).round(), which can disagree with
+  /// the word actually printed beside it when a score sits near a
+  /// threshold — the panel would read "Good" in the colour of Fair. Bands
+  /// come from ConfigService, so this cannot drift from the label.
+  static PdfColor _forBand(String band) {
+    switch (band) {
+      case 'poor':
+        return _ramp[0];
+      case 'fair':
+        return _ramp[2];
+      case 'good':
+        return _ramp[3];
+      case 'excellent':
+        return _ramp[4];
+      default:
+        return _muted;
+    }
+  }
 
   /// Mix a colour toward white by [amount] (0 = untouched, 1 = white).
   ///
@@ -160,7 +187,6 @@ class PdfReport {
           _herdBlock(v),
           pw.SizedBox(height: 20),
           ..._sectionBlock(v),
-          ..._vaccinationBlock(v),
           ..._notesBlocks(v),
         ],
       ),
@@ -263,7 +289,7 @@ class PdfReport {
   }
 
   static pw.Widget _scoreBlock(Evaluation v) {
-    final color = _forTotal(v.totalScore);
+    final color = _forBand(v.band);
 
     return pw.Row(
       children: [
@@ -363,32 +389,49 @@ class PdfReport {
     );
   }
 
-  /// Returned as a flat list so MultiPage can break between rows if the
-  /// block lands near the foot of a page.
+  /// Every section, with the individual findings underneath it.
+  ///
+  /// The summary-only version ("Feeding 4/5") tested as thin: a farmer
+  /// could see a score but not what produced it, so there was nothing to
+  /// act on. Each stored answer id is looked up in EvaluationTemplate and
+  /// printed as the question it came from.
+  ///
+  /// Returned flat so MultiPage can break between findings rather than
+  /// pushing a whole section to the next page.
   static List<pw.Widget> _sectionBlock(Evaluation v) {
-    final rows = Sections.keys.where(v.sections.containsKey).toList();
-    if (rows.isEmpty) return const [];
+    final keys = Sections.keys.where(v.sections.containsKey).toList();
+    if (keys.isEmpty) return const [];
 
-    return [
-      _heading('Section scores'),
-      pw.SizedBox(height: 8),
-      for (final key in rows)
-        _sectionRow(Sections.label(key), v.sections[key]!.score),
-      pw.SizedBox(height: 20),
-    ];
+    final out = <pw.Widget>[_heading('Section findings'), pw.SizedBox(height: 10)];
+
+    for (final key in keys) {
+      final section = v.sections[key]!;
+      out.add(_sectionHeader(Sections.label(key), section.score));
+      out.add(pw.SizedBox(height: 5));
+      out.addAll(_answerRows(v, key, section));
+      out.add(pw.SizedBox(height: 13));
+    }
+
+    out.add(pw.SizedBox(height: 6));
+    return out;
   }
 
-  static pw.Widget _sectionRow(String label, int score) {
+  /// Section name, the five blocks, and the score.
+  static pw.Widget _sectionHeader(String label, int score) {
     final color = _forSection(score);
 
-    return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(vertical: 4),
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(bottom: 4),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(bottom: pw.BorderSide(color: _rule, width: 0.6)),
+      ),
       child: pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.center,
         children: [
-          pw.SizedBox(
-            width: 168,
-            child: pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+          pw.Expanded(
+            child: pw.Text(label,
+                style: pw.TextStyle(
+                    fontSize: 11, fontWeight: pw.FontWeight.bold)),
           ),
           // Five blocks rather than a number alone — the farmer reads the
           // shape before they read the digit.
@@ -396,8 +439,8 @@ class PdfReport {
             children: [
               for (var n = 1; n <= 5; n++)
                 pw.Container(
-                  width: 26,
-                  height: 7,
+                  width: 22,
+                  height: 6,
                   margin: const pw.EdgeInsets.only(right: 3),
                   decoration: pw.BoxDecoration(
                     color: n <= score ? color : _rule,
@@ -406,115 +449,209 @@ class PdfReport {
                 ),
             ],
           ),
-          pw.Spacer(),
-          pw.Text('$score / 5',
-              style: pw.TextStyle(
-                  fontSize: 10,
-                  fontWeight: pw.FontWeight.bold,
-                  color: color)),
+          pw.SizedBox(width: 8),
+          pw.SizedBox(
+            width: 34,
+            child: pw.Text('$score / 5',
+                textAlign: pw.TextAlign.right,
+                style: pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                    color: color)),
+          ),
         ],
       ),
     );
   }
 
-  /// The vaccination record, which the single-page report never showed at
-  /// all. Every disease the officer asked about is listed, including the
-  /// ones answered "not done" — an absent vaccination is the finding, and
-  /// hiding it would make the record look better than it is.
-  static List<pw.Widget> _vaccinationBlock(Evaluation v) {
-    if (v.vaccinations.isEmpty) return const [];
+  /// Turns the stored answer ids back into readable lines, using the same
+  /// templates the officer's screens were built from. This is why answer
+  /// ids are never renamed: change one and old reports stop being able to
+  /// describe themselves.
+  static List<pw.Widget> _answerRows(
+      Evaluation v, String key, SectionResult section) {
+    if (key == 'vaccination') return _vaccinationRows(v);
+
+    final answers = section.answers;
+
+    if (key == 'performance') {
+      final rows = <pw.Widget>[
+        // containsKey, not a truth test: ear_tags was added after the
+        // first v2 visits, so on those it is ABSENT rather than false.
+        // Printing "No" would invent a finding nobody recorded.
+        for (final q in EvaluationTemplate.performanceChecks)
+          if (answers.containsKey(q.id))
+            _finding(q.text, answers[q.id] == true ? 'Yes' : 'No',
+                good: answers[q.id] == true),
+      ];
+
+      // The measured figures are recorded but not scored, so they are set
+      // apart from the practices above them.
+      final figures = <pw.Widget>[];
+      EvaluationTemplate.performanceKpis.forEach((id, meta) {
+        if (answers[id] != null) {
+          figures.add(
+              _finding('${meta[0]} (${meta[1]})', '${answers[id]}',
+                  neutral: true));
+        }
+      });
+      if (figures.isNotEmpty) {
+        rows.add(pw.SizedBox(height: 5));
+        rows.add(pw.Text('Recorded figures',
+            style: pw.TextStyle(
+                fontSize: 8, letterSpacing: 0.8, color: _muted)));
+        rows.add(pw.SizedBox(height: 3));
+        rows.addAll(figures);
+      }
+      return rows;
+    }
+
+    if (key == 'records') {
+      // Unconditional, unlike performance: all five record types have
+      // always been asked, so a missing answer means the record is not
+      // kept — and that absence is the finding.
+      return [
+        for (final r in EvaluationTemplate.recordTypes)
+          _finding(r.text, answers[r.id] == true ? 'Kept' : 'Not kept',
+              good: answers[r.id] == true),
+      ];
+    }
+
+    final template = EvaluationTemplate.forKey(key);
+    if (template == null) return const [];
 
     return [
-      _heading('Vaccination record'),
-      pw.SizedBox(height: 8),
-      pw.Container(
-        padding: const pw.EdgeInsets.only(bottom: 5),
-        decoration: const pw.BoxDecoration(
-          border:
-              pw.Border(bottom: pw.BorderSide(color: _rule, width: 0.6)),
-        ),
-        child: pw.Row(
-          children: [
-            pw.Expanded(
-                flex: 4,
-                child: pw.Text('DISEASE',
-                    style: pw.TextStyle(
-                        fontSize: 7.5, letterSpacing: 1, color: _muted))),
-            pw.Expanded(
-                flex: 3,
-                child: pw.Text('FREQUENCY',
-                    style: pw.TextStyle(
-                        fontSize: 7.5, letterSpacing: 1, color: _muted))),
-            pw.Expanded(
-                flex: 3,
-                child: pw.Text('LAST GIVEN',
-                    style: pw.TextStyle(
-                        fontSize: 7.5, letterSpacing: 1, color: _muted))),
-            pw.SizedBox(
-                width: 62,
-                child: pw.Text('RECORDS',
-                    textAlign: pw.TextAlign.right,
-                    style: pw.TextStyle(
-                        fontSize: 7.5, letterSpacing: 1, color: _muted))),
-          ],
-        ),
+      for (final q in template.questions)
+        if (answers.containsKey(q.id))
+          _finding(
+            q.text,
+            answers[q.id] == true
+                ? template.positiveLabel
+                : template.negativeLabel,
+            good: answers[q.id] == true,
+          ),
+    ];
+  }
+
+  /// One question and its answer.
+  static pw.Widget _finding(String label, String value,
+      {bool? good, bool neutral = false}) {
+    final color =
+        neutral || good == null ? _ink : (good ? _green : _ramp[0]);
+
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          // A dot rather than a tick or cross: the answer word already
+          // carries the verdict, and two markers for one finding reads as
+          // clutter on paper.
+          pw.Container(
+            width: 3,
+            height: 3,
+            margin: const pw.EdgeInsets.only(top: 4, left: 2, right: 9),
+            decoration: pw.BoxDecoration(
+              color: neutral ? _rule : color,
+              shape: pw.BoxShape.circle,
+            ),
+          ),
+          pw.Expanded(
+            child: pw.Text(label,
+                style: const pw.TextStyle(fontSize: 9.5, color: _ink)),
+          ),
+          pw.SizedBox(width: 10),
+          pw.Text(value,
+              style: pw.TextStyle(
+                  fontSize: 9.5,
+                  color: color,
+                  fontWeight:
+                      neutral ? pw.FontWeight.normal : pw.FontWeight.bold)),
+        ],
       ),
+    );
+  }
+
+  /// The vaccination record, printed inside its own section rather than
+  /// floating below all seven.
+  ///
+  /// Iterated, never indexed: FMD, LSD and anthrax are mandatory but
+  /// brucellosis is optional and omitted entirely when not assessed, so
+  /// the array length varies. Officers can also add their own diseases.
+  static List<pw.Widget> _vaccinationRows(Evaluation v) {
+    if (v.vaccinations.isEmpty) {
+      return [
+        _finding('No vaccination information recorded', '\u2014',
+            neutral: true),
+      ];
+    }
+
+    return [
       for (final s in v.vaccinations) _vaccinationRow(s),
-      pw.SizedBox(height: 20),
     ];
   }
 
   static pw.Widget _vaccinationRow(Vaccination s) {
-    // "The farmer cannot recall" is a different answer from "never given",
-    // and the model keeps them apart. So does this.
+    final notDone = s.frequency == 'not_done';
+
+    // "The farmer cannot recall" is a different answer from "never
+    // given", and the model keeps them apart. So does this.
     final last = s.dateUnknown
         ? 'Farmer unsure'
         : (s.lastAdministered == null
             ? '\u2014'
             : Fmt.date(s.lastAdministered));
 
-    return pw.Container(
-      padding: const pw.EdgeInsets.symmetric(vertical: 5),
-      decoration: const pw.BoxDecoration(
-        border: pw.Border(
-            bottom: pw.BorderSide(color: PdfColor.fromInt(0xFFEDEDED))),
-      ),
+    final frequency =
+        EvaluationTemplate.vaccinationFrequencies[s.frequency] ??
+            Fmt.humanise(s.frequency);
+
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 2.5),
       child: pw.Row(
-        crossAxisAlignment: pw.CrossAxisAlignment.center,
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
+          pw.Container(
+            width: 3,
+            height: 3,
+            margin: const pw.EdgeInsets.only(top: 4, left: 2, right: 9),
+            decoration: pw.BoxDecoration(
+              color: notDone ? _ramp[0] : _green,
+              shape: pw.BoxShape.circle,
+            ),
+          ),
           pw.Expanded(
-              flex: 4,
-              child: pw.Text(s.disease,
-                  style: const pw.TextStyle(fontSize: 10))),
-          pw.Expanded(
-              flex: 3,
-              child: pw.Text(Fmt.humanise(s.frequency),
-                  style: const pw.TextStyle(fontSize: 9.5, color: _muted))),
-          pw.Expanded(
-              flex: 3,
-              child: pw.Text(last,
-                  style: pw.TextStyle(
-                      fontSize: 9.5,
-                      color: s.dateUnknown ? _muted : _ink))),
+            child: pw.Text(s.disease,
+                style: const pw.TextStyle(fontSize: 9.5, color: _ink)),
+          ),
           pw.SizedBox(
-            width: 62,
-            child: pw.Align(
-              alignment: pw.Alignment.centerRight,
-              child: pw.Container(
-                padding: const pw.EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
-                decoration: pw.BoxDecoration(
-                  color: s.recordsAvailable ? _tint : PdfColors.white,
-                  border: pw.Border.all(color: _rule, width: 0.6),
-                  borderRadius: pw.BorderRadius.circular(3),
-                ),
-                child: pw.Text(
-                  s.recordsAvailable ? 'On file' : 'None',
-                  style: pw.TextStyle(
-                      fontSize: 7.5,
-                      color: s.recordsAvailable ? _green : _muted),
-                ),
-              ),
+            width: 92,
+            child: pw.Text(last,
+                style: pw.TextStyle(
+                    fontSize: 9,
+                    color: s.dateUnknown ? _muted : _ink)),
+          ),
+          pw.SizedBox(
+            width: 78,
+            child: pw.Text(
+              frequency,
+              textAlign: pw.TextAlign.right,
+              // A "Not done" prints red — that absence is the finding.
+              style: pw.TextStyle(
+                  fontSize: 9.5,
+                  color: notDone ? _ramp[0] : _ink,
+                  fontWeight:
+                      notDone ? pw.FontWeight.bold : pw.FontWeight.normal),
+            ),
+          ),
+          pw.SizedBox(
+            width: 54,
+            child: pw.Text(
+              s.recordsAvailable ? 'On file' : 'No records',
+              textAlign: pw.TextAlign.right,
+              style: pw.TextStyle(
+                  fontSize: 8,
+                  color: s.recordsAvailable ? _green : _muted),
             ),
           ),
         ],

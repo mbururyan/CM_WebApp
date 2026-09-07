@@ -128,6 +128,10 @@ class _Body extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _FilterBar(window: window, onChanged: onWindow, visits: a.visitCount),
+        if (a.legacyExcluded > 0) ...[
+          const SizedBox(height: 12),
+          _LegacyNotice(count: a.legacyExcluded),
+        ],
         const SizedBox(height: 16),
 
         // ---- headline figures ----
@@ -169,11 +173,11 @@ class _Body extends StatelessWidget {
               accent: AppColors.greenLight,
               // No visits means nothing to rank, and a chevron promising a
               // list that turns out empty is worse than no chevron.
-              onTap: a.visits.isEmpty
+              onTap: a.scoredVisits.isEmpty
                   ? null
                   : () => ScoreDialog.show(
                         context,
-                        visits: a.visits,
+                        visits: a.scoredVisits,
                         fleetAverage: avg,
                         periodLabel: window.label,
                       ),
@@ -206,7 +210,7 @@ class _Body extends StatelessWidget {
               onTap: () => OverdueDialog.show(
                 context,
                 overdue: overdue,
-                allVisits: a.data.evaluations,
+                allVisits: a.scoredEvaluations,
                 overdueDays: a.overdueDays,
               ),
             ),
@@ -267,7 +271,8 @@ class _Body extends StatelessWidget {
         Panel(
           title: 'Where the herd is weakest',
           note: 'Average score per section across '
-              '${a.visitCount} ${a.visitCount == 1 ? "visit" : "visits"}, '
+              '${a.scoredVisits.length} '
+              '${a.scoredVisits.length == 1 ? "visit" : "visits"}, '
               'worst first.',
           child: a.sectionRanking.isEmpty
               ? const Text('No section scores in this period.',
@@ -301,6 +306,47 @@ class _Body extends StatelessWidget {
     if (change == null) return 'no earlier period to compare';
     final sign = change >= 0 ? '+' : '';
     return '$sign${change.toStringAsFixed(1)} vs previous ${w.days} days';
+  }
+}
+
+/// Says out loud that some visits are missing from the score figures.
+///
+/// Without this the Visits tile and the Average Score tile disagree and
+/// there is nothing on screen explaining why — which reads as a bug, and
+/// worse, invites someone to trust whichever number suits them.
+class _LegacyNotice extends StatelessWidget {
+  const _LegacyNotice({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(
+            AppColors.amber.withValues(alpha: 0.08), AppColors.surface),
+        border: Border.all(color: AppColors.amber.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 16, color: AppColors.amber),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$count earlier ${count == 1 ? "visit uses" : "visits use"} '
+              'the old scoring and '
+              '${count == 1 ? "is" : "are"} left out of score figures. '
+              'Visit counts and herd totals still include '
+              '${count == 1 ? "it" : "them"}.',
+              style: const TextStyle(
+                  fontSize: 12, color: AppColors.text2, height: 1.5),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

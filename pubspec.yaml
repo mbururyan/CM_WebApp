@@ -41,6 +41,7 @@ dependencies:
   excel: ^4.0.6
   web: ^1.1.1
   pdf: ^3.12.0
+  firebase_storage: ^13.5.0
 
 dev_dependencies:
   flutter_test:

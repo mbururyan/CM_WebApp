@@ -77,6 +77,53 @@ class Vaccination {
       );
 }
 
+/// One photograph attached to a visit.
+///
+/// Evidence for the office, not for the farmer — these never reach the
+/// PDF. Changing that would be a deliberate decision, not a default.
+class EvaluationPhoto {
+  const EvaluationPhoto({
+    required this.id,
+    required this.filename,
+    required this.url,
+    required this.caption,
+    required this.bytes,
+    required this.addedAt,
+  });
+
+  final String id;
+  final String filename;
+
+  /// Storage download url, or null while the photo is still queued on the
+  /// officer's phone. A null url is NOT a missing photo.
+  final String? url;
+
+  /// Reserved. Always empty for now.
+  final String caption;
+
+  final int bytes;
+
+  /// Device clock, not the server — serverTimestamp() is not allowed
+  /// inside an array element. Fine for ordering within a visit, not for
+  /// anything else.
+  final DateTime? addedAt;
+
+  /// Taken, but not yet uploaded. Show it as waiting, never as broken.
+  bool get isQueued => url == null || url!.isEmpty;
+
+  factory EvaluationPhoto.fromMap(Map<String, dynamic> m) {
+    final raw = (m['url'] as String?)?.trim();
+    return EvaluationPhoto(
+      id: (m['id'] as String?) ?? '',
+      filename: (m['filename'] as String?) ?? '',
+      url: (raw == null || raw.isEmpty) ? null : raw,
+      caption: (m['caption'] as String?)?.trim() ?? '',
+      bytes: (m['bytes'] as num?)?.toInt() ?? 0,
+      addedAt: (m['added_at'] as Timestamp?)?.toDate(),
+    );
+  }
+}
+
 /// A row from `evaluations/{evalId}` — one farm visit.
 class Evaluation {
   const Evaluation({
@@ -101,6 +148,8 @@ class Evaluation {
     required this.rating,
     required this.status,
     required this.createdAt,
+    required this.scoringVersion,
+    required this.photos,
   });
 
   final String id;
@@ -134,8 +183,23 @@ class Evaluation {
   final String rating;
   final String status;
 
+  /// Which scoring scheme produced [totalScore].
+  ///
+  /// v1 took a 1-5 judgement per section, so a visit ran 7-35 and a
+  /// section score of 3 was an opinion. v2 has the sections count
+  /// themselves, one point per item present, so 0 is reachable and a 3
+  /// means three yes answers. The two are NOT the same measurement and
+  /// must never be averaged together.
+  ///
+  /// Pilot documents predate the field. Absent means 1.
+  final int scoringVersion;
+
   /// Server write time. Used only to break same-day ties.
   final DateTime? createdAt;
+
+  /// Up to ten per visit. Unscored and outside the seven sections — a
+  /// visit with no photos is still complete.
+  final List<EvaluationPhoto> photos;
 
   factory Evaluation.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? const {};
@@ -185,6 +249,11 @@ class Evaluation {
       rating: (d['rating'] as String?) ?? '',
       status: (d['status'] as String?) ?? 'draft',
       createdAt: (d['created_at'] as Timestamp?)?.toDate(),
+      scoringVersion: (d['scoring_version'] as num?)?.toInt() ?? 1,
+      photos: ((d['photos'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => EvaluationPhoto.fromMap(Map<String, dynamic>.from(m)))
+          .toList(),
     );
   }
 
@@ -204,6 +273,17 @@ class Evaluation {
   int get totalHerd => breedingCows + bulls + calves + growersSteers;
 
   bool get isSubmitted => status == 'submitted';
+
+  /// Whether this visit's scores can be compared with current ones.
+  bool get isCurrentScoring => scoringVersion >= 2;
+
+  bool get hasPhotos => photos.isNotEmpty;
+
+  /// Only the ones that have reached Storage and can actually be shown.
+  List<EvaluationPhoto> get visiblePhotos =>
+      photos.where((p) => !p.isQueued).toList();
+
+  int get queuedPhotoCount => photos.where((p) => p.isQueued).length;
 
   /// Rating derived from the score rather than read from the document, so
   /// changing the bands in Settings re-bands history without a migration.

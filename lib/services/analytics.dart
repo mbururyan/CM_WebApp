@@ -98,6 +98,26 @@ class Analytics {
 
   List<Evaluation> get visits => _visits;
 
+  /// Visits in the window whose scores are on the CURRENT scheme.
+  ///
+  /// v1 scored each section as a 1-5 judgement; v2 has the sections count
+  /// themselves and 0 is reachable. Averaging the two produces a number
+  /// that describes neither. Every score figure below runs on this list;
+  /// counts of activity — how many visits, by whom, how much head — run on
+  /// the full one, because a v1 visit still happened.
+  late final List<Evaluation> scoredVisits =
+      _visits.where((v) => v.isCurrentScoring).toList();
+
+  /// How many visits in the window are left out of the score figures.
+  /// Surfaced in the UI so a lower visit count on the score panels reads
+  /// as deliberate rather than as data loss.
+  int get legacyExcluded => _visits.length - scoredVisits.length;
+
+  /// Every current-scheme visit, ignoring the window — for the figures
+  /// that are facts about a farm rather than about the filter.
+  late final List<Evaluation> scoredEvaluations =
+      data.evaluations.where((v) => v.isCurrentScoring).toList();
+
   // ---------- headline figures ----------
 
   /// Not windowed: the register is the register regardless of date.
@@ -113,8 +133,9 @@ class Analytics {
   /// Null when there are no visits — a zero would read as "the fleet scores
   /// zero", which is a different and false claim.
   double? get averageScore {
-    if (_visits.isEmpty) return null;
-    return _visits.fold<int>(0, (a, v) => a + v.totalScore) / _visits.length;
+    if (scoredVisits.isEmpty) return null;
+    return scoredVisits.fold<int>(0, (a, v) => a + v.totalScore) /
+        scoredVisits.length;
   }
 
   /// Change against the equally-sized period immediately before the window.
@@ -228,7 +249,7 @@ class Analytics {
     final totals = <String, int>{};
     final counts = <String, int>{};
 
-    for (final v in _visits) {
+    for (final v in scoredVisits) {
       v.sectionScores.forEach((key, score) {
         totals[key] = (totals[key] ?? 0) + score;
         counts[key] = (counts[key] ?? 0) + 1;
@@ -259,7 +280,7 @@ class Analytics {
       'good': 0,
       'excellent': 0,
     };
-    for (final v in _visits) {
+    for (final v in scoredVisits) {
       final band = Evaluation.bandFor(v.totalScore);
       mix[band] = (mix[band] ?? 0) + 1;
     }
@@ -318,9 +339,14 @@ class Analytics {
 
   // ---------- helpers ----------
 
+  /// Current-scheme visits only: this feeds the period-on-period delta,
+  /// and a v1 visit on either side of the comparison would invent a swing
+  /// that is really just a change of measurement.
   List<Evaluation> _between(DateTime from, DateTime to) => data.evaluations
       .where((v) =>
-          !v.evaluationDate.isBefore(from) && v.evaluationDate.isBefore(to))
+          v.isCurrentScoring &&
+          !v.evaluationDate.isBefore(from) &&
+          v.evaluationDate.isBefore(to))
       .toList();
 
   double? _mean(List<Evaluation> list) {

@@ -9,6 +9,7 @@ import '../services/farm_stats.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
+import '../widgets/filter_bar.dart';
 import '../widgets/panel.dart';
 import 'farm_detail_page.dart';
 
@@ -114,6 +115,7 @@ class _FarmsPageState extends State<FarmsPage> {
               county: _county,
               system: _system,
               coverage: _coverage,
+              search: _search,
               onSearch: (v) => setState(() => _search = v),
               onCounty: (v) => setState(() => _county = v),
               onSystem: (v) => setState(() => _system = v),
@@ -527,6 +529,7 @@ class _Filters extends StatelessWidget {
     required this.county,
     required this.system,
     required this.coverage,
+    required this.search,
     required this.onSearch,
     required this.onCounty,
     required this.onSystem,
@@ -539,6 +542,7 @@ class _Filters extends StatelessWidget {
   final String county;
   final String system;
   final String coverage;
+  final String search;
   final ValueChanged<String> onSearch;
   final ValueChanged<String> onCounty;
   final ValueChanged<String> onSystem;
@@ -547,82 +551,32 @@ class _Filters extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      crossAxisAlignment: WrapCrossAlignment.center,
+    return FilterBar(
       children: [
-        SizedBox(
-          width: 250,
-          child: TextField(
-            decoration: const InputDecoration(
-              hintText: 'Search farm, owner or village',
-              prefixIcon: Icon(Icons.search, size: 18, color: AppColors.muted),
-              isDense: true,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            ),
-            style: const TextStyle(fontSize: 13),
-            onChanged: onSearch,
-          ),
+        FilterSearch(
+          hint: 'Search farm, owner or village',
+          value: search,
+          onChanged: onSearch,
         ),
-        _Select(value: county, items: counties, onChanged: onCounty),
-        _Select(value: system, items: systems, onChanged: onSystem),
-        _Select(
+        FilterSelect(
+            label: 'County',
+            value: county,
+            items: counties,
+            onChanged: onCounty),
+        FilterSelect(
+            label: 'System',
+            value: system,
+            items: systems,
+            onChanged: onSystem),
+        FilterSelect(
+          label: 'Coverage',
           value: coverage,
           items: const ['All farms', 'Never visited', 'Overdue'],
           onChanged: onCoverage,
         ),
         if (onExport != null)
-          OutlinedButton.icon(
-            onPressed: onExport,
-            icon: const Icon(Icons.download_outlined, size: 16),
-            label: const Text('Export'),
-          ),
+          FilterExportButton(onPressed: onExport, label: 'Export'),
       ],
-    );
-  }
-}
-
-class _Select extends StatelessWidget {
-  const _Select({
-    required this.value,
-    required this.items,
-    required this.onChanged,
-  });
-
-  final String value;
-  final List<String> items;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppColors.fill,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: items.contains(value) ? value : items.first,
-          items: items
-              .map((i) => DropdownMenuItem(
-                    value: i,
-                    child: Text(i, style: const TextStyle(fontSize: 13)),
-                  ))
-              .toList(),
-          onChanged: (v) {
-            if (v != null) onChanged(v);
-          },
-          isDense: true,
-          dropdownColor: AppColors.surface,
-          borderRadius: BorderRadius.circular(10),
-          icon: const Icon(Icons.expand_more, size: 18, color: AppColors.muted),
-        ),
-      ),
     );
   }
 }

@@ -109,9 +109,9 @@ class _DashboardShellState extends State<DashboardShell> {
       case 4:
         return const ExportsPage();
       case 5:
-        return const SettingsPage();
-      case 6:
         return const GalleryPage();
+      case 6:
+        return const SettingsPage();
       // Settings used to be the fallback, which meant any index the switch
       // did not know about rendered the admin-only page — including for
       // evaluators, who cannot even see it in the nav. Overview is the safe

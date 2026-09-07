@@ -10,6 +10,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
 import '../utils/formatters.dart';
 import '../widgets/confirm_delete.dart';
+import '../widgets/filter_bar.dart';
 import '../widgets/panel.dart';
 import 'visit_detail_page.dart';
 
@@ -184,6 +185,7 @@ class _VisitsPageState extends State<VisitsPage> {
               evaluator: _evaluator,
               rating: _rating,
               days: _days,
+              search: _search,
               onSearch: (v) => setState(() {
                 _search = v;
                 _shown = _pageSize;
@@ -295,6 +297,7 @@ const _tableWidth = _cFarm +
     _cScore +
     _cRating +
     _cChevron +
+    14 +
     32; // horizontal padding
 
 class _Listing extends StatelessWidget {
@@ -562,6 +565,7 @@ class _Filters extends StatelessWidget {
     required this.evaluator,
     required this.rating,
     required this.days,
+    required this.search,
     required this.onSearch,
     required this.onCounty,
     required this.onEvaluator,
@@ -576,6 +580,7 @@ class _Filters extends StatelessWidget {
   final String evaluator;
   final String rating;
   final int days;
+  final String search;
   final ValueChanged<String> onSearch;
   final ValueChanged<String> onCounty;
   final ValueChanged<String> onEvaluator;
@@ -585,128 +590,38 @@ class _Filters extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      crossAxisAlignment: WrapCrossAlignment.center,
+    return FilterBar(
       children: [
-        SizedBox(
+        FilterSearch(
+          hint: 'Search farm or evaluator',
+          value: search,
+          onChanged: onSearch,
           width: 240,
-          child: TextField(
-            decoration: const InputDecoration(
-              hintText: 'Search farm or evaluator',
-              prefixIcon: Icon(Icons.search, size: 18, color: AppColors.muted),
-              isDense: true,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-            ),
-            style: const TextStyle(fontSize: 13),
-            onChanged: onSearch,
-          ),
         ),
-        // Labelled: four dropdowns all reading "All" say nothing about what
-        // they filter.
-        _Select(
+        FilterSelect(
             label: 'County',
             value: county,
             items: counties,
             onChanged: onCounty),
-        _Select(
+        FilterSelect(
             label: 'Evaluator',
             value: evaluator,
             items: evaluators,
             onChanged: onEvaluator),
-        _Select(
+        FilterSelect(
           label: 'Period',
-          value: _dayLabel(days),
-          items: const ['All time', 'Last 30 days', 'Last 90 days',
-              'Last year'],
-          onChanged: (v) => onDays(_dayValue(v)),
+          value: FilterPeriod.label(days),
+          items: FilterPeriod.options,
+          onChanged: (v) => onDays(FilterPeriod.days(v)),
         ),
-        _Select(
+        FilterSelect(
           label: 'Rating',
           value: rating == 'All' ? 'All' : Fmt.humanise(rating),
           items: const ['All', 'Poor', 'Fair', 'Good', 'Excellent'],
           onChanged: (v) => onRating(v == 'All' ? 'All' : v.toLowerCase()),
         ),
-        if (onExport != null)
-          FilledButton.icon(
-            onPressed: onExport,
-            icon: const Icon(Icons.download_outlined, size: 16),
-            label: const Text('Export to Excel'),
-            style: FilledButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-            ),
-          ),
+        if (onExport != null) FilterExportButton(onPressed: onExport),
       ],
-    );
-  }
-
-  static String _dayLabel(int d) => switch (d) {
-        30 => 'Last 30 days',
-        90 => 'Last 90 days',
-        365 => 'Last year',
-        _ => 'All time',
-      };
-
-  static int _dayValue(String label) => switch (label) {
-        'Last 30 days' => 30,
-        'Last 90 days' => 90,
-        'Last year' => 365,
-        _ => 0,
-      };
-}
-
-class _Select extends StatelessWidget {
-  const _Select({
-    required this.label,
-    required this.value,
-    required this.items,
-    required this.onChanged,
-  });
-
-  final String label;
-  final String value;
-  final List<String> items;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppColors.fill,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('${label.toUpperCase()}  ', style: AppTheme.eyebrow),
-          DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: items.contains(value) ? value : items.first,
-              items: items
-                  .map((i) => DropdownMenuItem(
-                        value: i,
-                        child: Text(i,
-                            style: const TextStyle(fontSize: 13)),
-                      ))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-              },
-              isDense: true,
-              dropdownColor: AppColors.surface,
-              borderRadius: BorderRadius.circular(10),
-              icon: const Icon(Icons.expand_more,
-                  size: 18, color: AppColors.muted),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
