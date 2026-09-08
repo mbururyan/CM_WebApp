@@ -53,5 +53,67 @@ class Fmt {
     return words[0].toUpperCase() + words.substring(1);
   }
 
+  // ---- weeks -------------------------------------------------------
+  //
+  // The office works in week numbers, and the 2026 company calendar runs
+  // Mon-Sat with no Sunday column. Its numbering is plain ISO 8601 — all
+  // 310 rows of the calendar match the arithmetic below exactly — so the
+  // weeks are computed rather than tabulated. A shipped table would only
+  // be a copy of this that goes stale every January.
+
+  /// The Monday that starts the ISO week containing [d].
+  ///
+  /// A Sunday therefore belongs to the week that began SIX days earlier,
+  /// not the one starting the next day. That is what keeps a visit
+  /// written up on a Sunday inside the weekly figures — the calendar has
+  /// no Sunday, but the data does, and dropping those would leave the
+  /// visit count and the weekly chart disagreeing with each other.
+  static DateTime weekStart(DateTime d) {
+    final day = DateTime(d.year, d.month, d.day);
+    return day.subtract(Duration(days: day.weekday - 1));
+  }
+
+  /// ISO 8601 week number.
+  ///
+  /// The Thursday of a week decides which year and which week the whole
+  /// week belongs to, which is why a week straddling New Year is not
+  /// split in two.
+  static int isoWeek(DateTime d) {
+    final day = DateTime(d.year, d.month, d.day);
+    final thursday = day.add(Duration(days: 4 - day.weekday));
+    final dayOfYear =
+        thursday.difference(DateTime(thursday.year, 1, 1)).inDays + 1;
+    return (dayOfYear - 1) ~/ 7 + 1;
+  }
+
+  /// The year that owns this week, which is not always the calendar year
+  /// \u2014 31 Dec 2026 is week 53 of 2026, and so is 1 Jan 2027.
+  static int isoWeekYear(DateTime d) {
+    final day = DateTime(d.year, d.month, d.day);
+    return day.add(Duration(days: 4 - day.weekday)).year;
+  }
+
+  /// Wk 32
+  static String weekLabel(DateTime d) => 'Wk ${isoWeek(d)}';
+
+  /// 05–10 Jan — the working days of that week.
+  ///
+  /// Mon to Sat, five days on from the Monday, because that is the week
+  /// the office recognises. Sunday data is still counted in the week; it
+  /// is just not named in the label.
+  static String weekDays(DateTime start) {
+    final monday = weekStart(start);
+    final saturday = monday.add(const Duration(days: 5));
+    final left = monday.month == saturday.month
+        ? _two(monday.day)
+        : '${_two(monday.day)} ${_months[monday.month - 1]}';
+    return '$left\u2013${_two(saturday.day)} '
+        '${_months[saturday.month - 1]}';
+  }
+
+  /// Week 32 · 03–08 Aug
+  static String weekRange(DateTime start) =>
+      'Week ${isoWeek(start)} \u00B7 ${weekDays(start)}';
+
   static String _two(int n) => n.toString().padLeft(2, '0');
 }

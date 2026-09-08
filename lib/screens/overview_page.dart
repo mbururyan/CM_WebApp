@@ -230,6 +230,18 @@ class _Body extends StatelessWidget {
         ),
         const SizedBox(height: 14),
 
+        // ---- visits per week ----
+        Panel(
+          title: 'Visits per week',
+          note: 'Last 12 weeks by ISO week number \u00B7 '
+              'not affected by the date filter above.',
+          child: VerticalBars(
+            slices: a.visitsByWeek(),
+            emptyMessage: 'No visits in the last 12 weeks.',
+          ),
+        ),
+        const SizedBox(height: 14),
+
         // ---- herd by farm ----
         Panel(
           title: 'Herd size by farm',

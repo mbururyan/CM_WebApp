@@ -1,5 +1,6 @@
 import '../models/evaluation.dart';
 import '../models/farm.dart';
+import '../utils/formatters.dart';
 import 'config_service.dart';
 import 'data_service.dart';
 
@@ -231,6 +232,44 @@ class Analytics {
   }
 
   int get farmsWithHerdData => latestVisitPerFarm.length;
+
+  /// Visits per ISO week, oldest first, over the trailing [weeks] weeks.
+  ///
+  /// NOT windowed. A weekly trend is a trend — slicing it by the date
+  /// filter would leave one bar standing whenever the filter is narrow,
+  /// which is the opposite of what the chart is for. Same reasoning as
+  /// [overdueFarms].
+  ///
+  /// Empty weeks are kept rather than skipped. A week with no visits is a
+  /// finding; dropping it would close the gap and make an idle fortnight
+  /// look like ordinary activity.
+  ///
+  /// Bucketed on the Monday, so a visit dated Sunday counts in the week
+  /// that began six days earlier. The office calendar runs Mon-Sat and
+  /// has no Sunday, but the data does.
+  List<Slice> visitsByWeek({int weeks = 12}) {
+    final latest = Fmt.weekStart(now);
+    final earliest = latest.subtract(Duration(days: 7 * (weeks - 1)));
+
+    final counts = <DateTime, int>{};
+    for (var i = 0; i < weeks; i++) {
+      counts[latest.subtract(Duration(days: 7 * i))] = 0;
+    }
+
+    for (final v in data.evaluations) {
+      final start = Fmt.weekStart(v.evaluationDate);
+      if (start.isBefore(earliest) || start.isAfter(latest)) continue;
+      counts[start] = (counts[start] ?? 0) + 1;
+    }
+
+    final keys = counts.keys.toList()..sort();
+    return [for (final k in keys) Slice(Fmt.weekLabel(k), counts[k]!)];
+  }
+
+  /// The Monday of the week before the current one — the default the
+  /// office thinks in, since this week is still in progress.
+  DateTime get lastWeekStart =>
+      Fmt.weekStart(now).subtract(const Duration(days: 7));
 
   /// Herd size per county, latest visit per farm.
   List<Slice> get herdByCounty {
